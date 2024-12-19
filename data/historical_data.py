@@ -50,10 +50,17 @@ class HistoricalDataFetcher:
         return None
 
     def fetch_historical_data(self):
-        """Fetch historical data with caching"""
+        """Fetch historical data with detailed coin information"""
         # Try to load from cache first
         cached_data = self.load_from_cache()
         if cached_data is not None:
+            print("\n🔍 Analyzing cached data quality:")
+            for symbol, df in cached_data.items():
+                print(f"\n{symbol} Analysis:")
+                print(f"Data points: {len(df)}")
+                print(f"Price range: ${df['Close'].min():.2f} to ${df['Close'].max():.2f}")
+                print(f"Daily returns range: {df['Close'].pct_change().min():.2%} to {df['Close'].pct_change().max():.2%}")
+                print(f"Volume range: ${df['Volume'].min():.2f} to ${df['Volume'].max():.2f}")
             return cached_data
         
         print("\n🔄 No cache found, fetching fresh data...")
@@ -63,55 +70,81 @@ class HistoricalDataFetcher:
         from_timestamp = int(pd.Timestamp(self.start_date).timestamp())
         to_timestamp = int(pd.Timestamp(self.end_date).timestamp())
         
-        print(f"\nFetching historical data for {len(self.symbols)} symbols...")
-        
-        # Get all coin IDs in one batch request
+        # Get detailed coin information
         try:
+            print("\n📊 Fetching coin details...")
             all_coins = self.cg.get_coins_markets(
                 vs_currency='usd',
                 per_page=250,
-                page=1
+                page=1,
+                sparkline=False
             )
-            symbol_to_id = {
-                coin['symbol'].upper(): coin['id'] 
-                for coin in all_coins
-            }
+            
+            # Create detailed symbol mapping
+            symbol_to_details = {}
+            for coin in all_coins:
+                symbol = coin['symbol'].upper()
+                symbol_to_details[symbol] = {
+                    'id': coin['id'],
+                    'name': coin['name'],
+                    'market_cap': coin['market_cap'],
+                    'current_price': coin['current_price'],
+                    'volume': coin['total_volume']
+                }
+                
+            print(f"\nFound {len(symbol_to_details)} coins in total")
+            
         except Exception as e:
             print(f"Error fetching coin list: {e}")
             return {}
 
-        # Process each symbol with progress bar
+        # Process each symbol with progress bar and detailed info
         for symbol in tqdm(self.symbols, desc="Fetching Historical Data"):
             try:
-                if symbol not in symbol_to_id:
-                    print(f"\n⚠️ No coin ID found for {symbol}")
+                if symbol not in symbol_to_details:
+                    print(f"\n⚠️ No coin details found for {symbol}")
                     continue
                 
-                coin_id = symbol_to_id[symbol]
+                coin_details = symbol_to_details[symbol]
+                print(f"\n📈 Processing {symbol} ({coin_details['name']}):")
+                print(f"Market Cap: ${coin_details['market_cap']:,.2f}")
+                print(f"Current Price: ${coin_details['current_price']:,.8f}")
+                print(f"24h Volume: ${coin_details['volume']:,.2f}")
                 
                 # Fetch historical data
                 data = self.cg.get_coin_market_chart_range_by_id(
-                    id=coin_id,
+                    id=coin_details['id'],
                     vs_currency='usd',
                     from_timestamp=from_timestamp,
                     to_timestamp=to_timestamp
                 )
                 
-                # Convert to DataFrame efficiently
+                # Convert to DataFrame with additional information
                 prices_df = pd.DataFrame(data['prices'], 
                                       columns=['timestamp', 'Close'])
                 volumes_df = pd.DataFrame(data['total_volumes'], 
                                        columns=['timestamp', 'Volume'])
                 
-                # Merge price and volume data
                 df = pd.merge(prices_df, volumes_df, on='timestamp')
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 df.set_index('timestamp', inplace=True)
+                
+                # Add coin details
                 df['symbol'] = symbol
+                df['name'] = coin_details['name']
+                df['market_cap'] = coin_details['market_cap']
+                
+                # Calculate additional metrics
+                df['daily_return'] = df['Close'].pct_change()
+                df['volume_change'] = df['Volume'].pct_change()
                 
                 historical_data[symbol] = df
                 
-                # Shorter delay between requests
+                # Print data summary
+                print(f"Data points: {len(df)}")
+                print(f"Date range: {df.index.min()} to {df.index.max()}")
+                print(f"Price range: ${df['Close'].min():.8f} to ${df['Close'].max():.8f}")
+                
                 time.sleep(self.delay)
                 
             except Exception as e:

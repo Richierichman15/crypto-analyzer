@@ -149,34 +149,47 @@ class TradingBot:
             return pd.DataFrame()
     
     def make_predictions(self, current_data):
-        """Make predictions with detailed debugging"""
+        """Make predictions with enhanced trading signals"""
         predictions = []
-        print("\n🔍 Making predictions:")
-        print(f"Processing {len(current_data)} symbols")
+        print("\n🔮 Making predictions:")
         
-        for _, row in current_data.iterrows():
+        for symbol in current_data['symbol'].unique():
             try:
-                symbol = row['symbol']
-                close_price = row['Close']
-                volume = row['Volume']
+                # Get symbol data
+                symbol_data = current_data[current_data['symbol'] == symbol]
+                price = symbol_data['Close'].iloc[-1]
                 
-                print(f"\n📈 Analyzing {symbol}:")
-                print(f"Close Price: ${close_price:.4f}")
-                print(f"Volume: {volume:.2f}")
+                # Calculate price and volume changes
+                price_change = symbol_data['Close'].pct_change().iloc[-1]
+                volume_change = symbol_data['Volume'].pct_change().iloc[-1]
                 
-                # Calculate prediction (simple momentum strategy)
-                prediction = 0
+                print(f"\n📊 Analysis for {symbol}:")
+                print(f"Price: ${price:.4f}")
+                print(f"Price Change: {price_change*100:.2f}%")
+                print(f"Volume Change: {volume_change*100:.2f}%")
                 
-                # Example: Buy signal if volume is above average and price is trending up
-                volume_change = row.get('Volume_Change', 0)
-                price_change = row.get('Price_Change', 0)
+                # More sensitive trading signals
+                prediction = 0.0
                 
-                if volume_change > 0.1 and price_change > 0:  # 10% volume increase and positive price change
-                    prediction = 0.1  # Buy signal
-                elif volume_change < -0.1 or price_change < 0:
-                    prediction = -0.1  # Sell signal
+                # Buy signals
+                if price_change > 0.001:  # Price up 0.1%
+                    prediction += 0.05
+                    print("✅ Positive price momentum")
                     
-                print(f"Prediction: {prediction:.4f}")
+                if volume_change > 0.01:  # Volume up 1%
+                    prediction += 0.05
+                    print("✅ Positive volume momentum")
+                    
+                # Sell signals
+                if price_change < -0.001:  # Price down 0.1%
+                    prediction -= 0.05
+                    print("🔻 Negative price momentum")
+                    
+                if volume_change < -0.01:  # Volume down 1%
+                    prediction -= 0.05
+                    print("🔻 Negative volume momentum")
+                
+                print(f"Final Prediction: {prediction:.4f}")
                 predictions.append(prediction)
                 
             except Exception as e:
@@ -292,7 +305,7 @@ class TradingBot:
             return 0
     
     def execute_trading_day(self, date, historical_data):
-        """Execute trades with detailed debugging"""
+        """Execute trades with improved risk management"""
         try:
             print(f"\n📅 Processing trades for {date}")
             
@@ -301,76 +314,92 @@ class TradingBot:
                 print("❌ No data available for this date")
                 return
             
-            print(f"Found {len(current_data)} symbols to analyze")
             predictions = self.make_predictions(current_data)
             
-            for i, (_, row) in enumerate(current_data.iterrows()):
-                symbol = str(row['symbol'])
-                price = row['Close']
-                prediction = predictions[i]
-                
-                print(f"\n🔄 Processing {symbol}:")
-                print(f"Price: ${price:.4f}")
-                print(f"Prediction: {prediction:.4f}")
-                
-                # Super aggressive trading (0.05 threshold)
-                if prediction > 0.05:
-                    print(f"🎯 Buy signal detected for {symbol}")
+            # Track successful trades
+            for symbol, position in list(self.simulator.portfolio.items()):
+                try:
+                    current_price = current_data[current_data['symbol'] == symbol]['Close'].iloc[-1]
+                    entry_price = position['entry_price']
+                    profit_pct = (current_price - entry_price) / entry_price * 100
                     
-                    # Calculate position size
-                    position_size = self.risk_manager.calculate_aggressive_position_size(
-                        self.simulator.balance,
-                        price,
-                        row.get('Volatility', 0.1),
-                        abs(prediction)
-                    )
+                    # Take profit at 2% or stop loss at -1%
+                    if profit_pct >= 2.0:
+                        print(f"🎯 Take profit triggered for {symbol} at {profit_pct:.2f}%")
+                        trade = self.simulator.execute_trade(
+                            date, symbol, current_price, 'SELL',
+                            position['quantity'], profit_pct/100
+                        )
+                        if trade:
+                            self.learning_metrics['successful_trades'] += 1
+                            self.learning_metrics['accuracy'].append(1)
+                            print(f"✅ Profitable sell executed: {symbol}")
+                            
+                    elif profit_pct <= -1.0:
+                        print(f"⛔ Stop loss triggered for {symbol} at {profit_pct:.2f}%")
+                        trade = self.simulator.execute_trade(
+                            date, symbol, current_price, 'SELL',
+                            position['quantity'], profit_pct/100
+                        )
+                        if trade:
+                            self.learning_metrics['accuracy'].append(0)
+                            print(f"🔻 Stop loss executed: {symbol}")
+                except Exception as e:
+                    print(f"❌ Error processing position {symbol}: {e}")
+            
+            # Process new trades
+            for symbol in current_data['symbol'].unique():
+                try:
+                    symbol_data = current_data[current_data['symbol'] == symbol]
+                    price = symbol_data['Close'].iloc[-1]
                     
-                    # Calculate fees
-                    fees = self.risk_manager.calculate_fees(price, position_size / price)
+                    # Get prediction for this symbol
+                    prediction = next((p for i, p in enumerate(predictions) 
+                                    if current_data.iloc[i]['symbol'] == symbol), 0)
                     
-                    print(f"Position size: ${position_size:.2f}")
-                    print(f"Estimated fees: ${fees:.2f}")
+                    print(f"\n🔄 Processing {symbol}:")
+                    print(f"Price: ${price:.4f}")
+                    print(f"Prediction: {prediction:.4f}")
                     
-                    if position_size - fees >= 3:
-                        quantity = (position_size - fees) / price
-                        print(f"Executing buy: {quantity:.4f} units")
+                    # Only trade if we have enough balance
+                    min_trade_size = 10  # Minimum $10 trade
+                    max_trade_size = min(self.simulator.balance * 0.1, 100)  # Max $100 or 10% of balance
+                    
+                    if prediction > 0.02 and max_trade_size >= min_trade_size:
+                        print(f"🎯 Buy signal detected for {symbol}")
+                        quantity = max_trade_size / price
                         
                         trade = self.simulator.execute_trade(
-                            date, symbol, price, 'BUY', quantity, prediction,
-                            fees=fees
+                            date, symbol, price, 'BUY',
+                            quantity, prediction
                         )
                         
                         if trade:
                             self.learning_metrics['trades'] += 1
                             print(f"✅ Buy executed: {symbol}")
-                    else:
-                        print(f"❌ Position size too small after fees")
-                
-                elif prediction < -0.05:
-                    print(f"🎯 Sell signal detected for {symbol}")
-                    if symbol in self.simulator.portfolio:
-                        position = self.simulator.portfolio[symbol]
-                        print(f"Current position: {position['quantity']:.4f} units")
-                        
-                        trade = self.simulator.execute_trade(
-                            date, symbol, price, 'SELL',
-                            position['quantity'], prediction
-                        )
-                        
-                        if trade:
-                            self.learning_metrics['trades'] += 1
-                            print(f"✅ Sell executed: {symbol}")
-                    else:
-                        print(f"❌ No position to sell")
-                
+                            
+                except Exception as e:
+                    print(f"❌ Error processing {symbol}: {e}")
+                    continue
+            
             # Print daily summary
+            portfolio_value = self.simulator.get_portfolio_value(date)
             print(f"\n📊 Daily Summary for {date}")
-            print(f"Portfolio Value: ${self.simulator.get_portfolio_value(date, current_data['Close'].to_dict()):.2f}")
+            print(f"Portfolio Value: ${portfolio_value:.2f}")
             print(f"Cash Balance: ${self.simulator.balance:.2f}")
+            print(f"Open Positions: {len(self.simulator.portfolio)}")
+            print(f"Success Rate: {self.get_success_rate():.2f}%")
             
         except Exception as e:
             print(f"❌ Error in execute_trading_day: {str(e)}")
             traceback.print_exc()
+    
+    def get_success_rate(self):
+        """Calculate success rate of trades"""
+        if self.learning_metrics['trades'] == 0:
+            return 0.0
+        return (self.learning_metrics['successful_trades'] / 
+                self.learning_metrics['trades'] * 100)
     
     def display_results(self):
         """Display backtest results"""
@@ -421,6 +450,12 @@ class TradingBot:
         except Exception as e:
             print(f"❌ Error calculating metrics: {e}")
             return df
+    
+    def get_accuracy_trend(self):
+        """Calculate accuracy trend of predictions"""
+        if not self.learning_metrics['accuracy']:
+            return "No accuracy data available"
+        return f"{sum(self.learning_metrics['accuracy'])/len(self.learning_metrics['accuracy']):.2f}%"
 
 def main():
     # Initialize the trading bot
@@ -429,6 +464,11 @@ def main():
     # Set up backtest parameters for last 30 days
     end_date = datetime.now()
     start_date = end_date - timedelta(days=30)
+    symbols = ['BTC', 'ETH', 'XRP', 'ADA', 'SOL']  # Added more symbols for better testing
+    
+    # Create fetcher instance and get historical data
+    fetcher = HistoricalDataFetcher(start_date, end_date, symbols)
+    historical_data = fetcher.fetch_historical_data()
     
     # Run backtest
     bot.backtest(start_date, end_date)
