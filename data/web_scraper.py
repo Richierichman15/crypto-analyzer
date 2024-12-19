@@ -6,6 +6,7 @@ import os
 import time
 from datetime import datetime, timedelta
 import hashlib
+import requests
 
 class WebScraper:
     def __init__(self, cache_dir='cache', cache_duration=3600):  # 1 hour cache by default
@@ -304,3 +305,41 @@ class WebScraper:
                 print(f"Date: {article['date']}")
                 print(f"Summary: {article['summary'][:200]}...")
                 print("-" * 30)
+
+class NewsFetcher:
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.base_url = "https://newsapi.org/v2/everything"
+
+    def fetch_news(self, query='crypto', from_date='2024-12-10', sort_by='popularity'):
+        """Fetch news articles using News API"""
+        params = {
+            'q': query,
+            'from': from_date,
+            'sortBy': sort_by,
+            'apiKey': self.api_key
+        }
+
+        try:
+            response = requests.get(self.base_url, params=params)
+            response.raise_for_status()  # Raise an error for bad responses
+            news_data = response.json()
+            
+            # Print the number of articles found
+            print(f"Found {len(news_data.get('articles', []))} articles.")
+            
+            # Print the titles of the first few articles
+            for article in news_data.get('articles', [])[:5]:
+                print(f"Title: {article.get('title')}")
+                print(f"Published At: {article.get('publishedAt')}")
+                print(f"Source: {article.get('source', {}).get('name')}")
+                print("-" * 30)
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching news: {e}")
+
+if __name__ == "__main__":
+    # Example usage
+    api_key = '274e832ccba44abfa54914e1ea6915f3'
+    news_fetcher = NewsFetcher(api_key)
+    news_fetcher.fetch_news()

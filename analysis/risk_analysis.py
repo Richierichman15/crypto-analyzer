@@ -6,6 +6,7 @@ class RiskAnalyzer:
     def risk_assessment(self, opportunities):
         """Perform comprehensive risk assessment on investment opportunities"""
         
+        # Check if opportunities is a DataFrame and if it's empty
         if opportunities is None or opportunities.empty:
             print("No opportunities to analyze")
             return

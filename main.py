@@ -1,6 +1,6 @@
 from config.settings import MIN_MARKET_CAP, MAX_MARKET_CAP
 from data.data_fetcher import DataFetcher
-from data.web_scraper import WebScraper
+from data.news_fetcher import NewsFetcher
 from models.ai_model import CryptoModel
 from analysis.feature_engineering import FeatureEngineer
 from analysis.risk_analysis import RiskAnalyzer
@@ -12,10 +12,7 @@ class CryptoAITrader:
         self.model = CryptoModel()
         self.feature_engineer = FeatureEngineer()
         self.risk_analyzer = RiskAnalyzer()
-        self.web_scraper = WebScraper(
-            cache_dir='cache',           # Where to store cache files
-            cache_duration=3600          # Cache duration in seconds (1 hour)
-        )
+        self.news_fetcher = NewsFetcher(api_key=os.getenv("NEWS_API_KEY"))
 
     def analyze_crypto_opportunities(self):
         """Advanced crypto opportunity analysis"""
@@ -40,8 +37,8 @@ class CryptoAITrader:
             print(f"24h Price Change: {coin['price_change_24h']:.2f}%")
             print(f"Investment Potential Score: {coin['investment_potential']:.4f}")
             
-            news_data = self.web_scraper.scrape_crypto_sentiment(coin['symbol'].lower())
-            self.web_scraper.print_news_summary(news_data)
+            # Fetch news using the News API
+            self.news_fetcher.fetch_news(query=coin['name'])
         
         return top_opportunities
 
