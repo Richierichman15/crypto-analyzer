@@ -86,16 +86,17 @@ class TradingSimulator:
             print(f"❌ Trade execution error: {str(e)}")
             return None
     
-    def get_portfolio_value(self, date, current_prices):
+    def get_portfolio_value(self, current_prices):
         """Calculate total portfolio value"""
-        total_value = self.balance
+        portfolio_value = self.balance
         
         for symbol, position in self.portfolio.items():
             if symbol in current_prices:
-                position_value = position['quantity'] * current_prices[symbol]
-                total_value += position_value
-        
-        return total_value
+                current_price = current_prices[symbol]
+                position_value = position['quantity'] * current_price
+                portfolio_value += position_value
+                
+        return portfolio_value
 
 class RiskManager:
     def __init__(self):

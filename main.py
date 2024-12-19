@@ -87,7 +87,7 @@ class TradingBot:
             print("\n📚 Learning Progress:")
             if self.learning_metrics['trades'] > 0:
                 success_rate = (self.learning_metrics['successful_trades'] / 
-                              self.learning_metrics['trades'] * 100)
+                                self.learning_metrics['trades'] * 100)
                 print(f"Total Trades: {self.learning_metrics['trades']}")
                 print(f"Successful Trades: {self.learning_metrics['successful_trades']}")
                 print(f"Success Rate: {success_rate:.2f}%")
@@ -198,32 +198,35 @@ class TradingBot:
                 
         return predictions
     
-    def calculate_technical_indicators(self, data):
-        """Calculate technical indicators with error checking"""
-        indicators = {}
+    def calculate_technical_indicators(self, symbol_data):
+        """Calculate all necessary technical indicators"""
         try:
-            # Basic price data
-            if 'Close' in data:
-                indicators['Close'] = data['Close']
-                print(f"Close price: {data['Close']}")
-            else:
-                print("❌ No Close price found!")
-                
-            # Volume data
-            if 'Volume' in data:
-                indicators['Volume'] = data['Volume']
-                print(f"Volume: {data['Volume']}")
-            else:
-                print("❌ No Volume data found!")
-                
-            # Add more indicator calculations with debugging
-            # ... (rest of your indicator calculations)
-            
-            return indicators
-            
+            # RSI
+            delta = symbol_data['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            symbol_data['RSI'] = 100 - (100 / (1 + rs))
+
+            # Moving Averages
+            symbol_data['SMA_5'] = symbol_data['Close'].rolling(window=5).mean()
+            symbol_data['SMA_20'] = symbol_data['Close'].rolling(window=20).mean()
+
+            # MACD
+            symbol_data['EMA_12'] = symbol_data['Close'].ewm(span=12, adjust=False).mean()
+            symbol_data['EMA_26'] = symbol_data['Close'].ewm(span=26, adjust=False).mean()
+            symbol_data['MACD'] = symbol_data['EMA_12'] - symbol_data['EMA_26']
+            symbol_data['MACD_Signal'] = symbol_data['MACD'].ewm(span=9, adjust=False).mean()
+
+            # Fill NaN values to avoid issues in calculations
+            symbol_data.fillna(method='bfill', inplace=True)
+            symbol_data.fillna(method='ffill', inplace=True)
+
+            return symbol_data
+
         except Exception as e:
-            print(f"❌ Error calculating indicators: {str(e)}")
-            return {}
+            print(f"❌ Error calculating technical indicators for symbol: {e}")
+            return symbol_data
     
     def analyze_trends(self, data):
         """Analyze multiple timeframe trends"""
@@ -305,104 +308,148 @@ class TradingBot:
             return 0
     
     def execute_trading_day(self, date, historical_data):
-        """Execute trades with improved risk management"""
+        """Execute trades with enhanced strategy including MACD"""
         try:
             print(f"\n📅 Processing trades for {date}")
-            
+
             current_data = self.get_current_day_data(historical_data, date)
             if current_data.empty:
                 print("❌ No data available for this date")
                 return
-            
-            predictions = self.make_predictions(current_data)
-            
-            # Track successful trades
-            for symbol, position in list(self.simulator.portfolio.items()):
-                try:
-                    current_price = current_data[current_data['symbol'] == symbol]['Close'].iloc[-1]
-                    entry_price = position['entry_price']
-                    profit_pct = (current_price - entry_price) / entry_price * 100
-                    
-                    # Take profit at 2% or stop loss at -1%
-                    if profit_pct >= 2.0:
-                        print(f"🎯 Take profit triggered for {symbol} at {profit_pct:.2f}%")
-                        trade = self.simulator.execute_trade(
-                            date, symbol, current_price, 'SELL',
-                            position['quantity'], profit_pct/100
-                        )
-                        if trade:
-                            self.learning_metrics['successful_trades'] += 1
-                            self.learning_metrics['accuracy'].append(1)
-                            print(f"✅ Profitable sell executed: {symbol}")
-                            
-                    elif profit_pct <= -1.0:
-                        print(f"⛔ Stop loss triggered for {symbol} at {profit_pct:.2f}%")
-                        trade = self.simulator.execute_trade(
-                            date, symbol, current_price, 'SELL',
-                            position['quantity'], profit_pct/100
-                        )
-                        if trade:
-                            self.learning_metrics['accuracy'].append(0)
-                            print(f"🔻 Stop loss executed: {symbol}")
-                except Exception as e:
-                    print(f"❌ Error processing position {symbol}: {e}")
-            
-            # Process new trades
+
+            # Create current prices dictionary for portfolio valuation
+            current_prices = {
+                row['symbol']: row['Close'] 
+                for _, row in current_data.iterrows()
+            }
+
+            # Calculate technical indicators
             for symbol in current_data['symbol'].unique():
-                try:
-                    symbol_data = current_data[current_data['symbol'] == symbol]
-                    price = symbol_data['Close'].iloc[-1]
-                    
-                    # Get prediction for this symbol
-                    prediction = next((p for i, p in enumerate(predictions) 
-                                    if current_data.iloc[i]['symbol'] == symbol), 0)
-                    
-                    print(f"\n🔄 Processing {symbol}:")
-                    print(f"Price: ${price:.4f}")
-                    print(f"Prediction: {prediction:.4f}")
-                    
-                    # Only trade if we have enough balance
-                    min_trade_size = 10  # Minimum $10 trade
-                    max_trade_size = min(self.simulator.balance * 0.1, 100)  # Max $100 or 10% of balance
-                    
-                    if prediction > 0.02 and max_trade_size >= min_trade_size:
-                        print(f"🎯 Buy signal detected for {symbol}")
-                        quantity = max_trade_size / price
-                        
+                symbol_data = current_data[current_data['symbol'] == symbol].copy()
+
+                # Calculate RSI
+                delta = symbol_data['Close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / loss
+                symbol_data['RSI'] = 100 - (100 / (1 + rs))
+
+                # Calculate moving averages
+                symbol_data['SMA_5'] = symbol_data['Close'].rolling(window=5).mean()
+                symbol_data['SMA_20'] = symbol_data['Close'].rolling(window=20).mean()
+
+                # Calculate MACD
+                symbol_data['EMA_12'] = symbol_data['Close'].ewm(span=12, adjust=False).mean()
+                symbol_data['EMA_26'] = symbol_data['Close'].ewm(span=26, adjust=False).mean()
+                symbol_data['MACD'] = symbol_data['EMA_12'] - symbol_data['EMA_26']
+                symbol_data['MACD_Signal'] = symbol_data['MACD'].ewm(span=9, adjust=False).mean()
+
+                print(f"\n📊 Analysis for {symbol}:")
+                print(f"Price: ${symbol_data['Close'].iloc[-1]:.4f}")
+                print(f"RSI: {symbol_data['RSI'].iloc[-1]:.2f}")
+                print(f"MACD: {symbol_data['MACD'].iloc[-1]:.4f}")
+                print(f"MACD Signal: {symbol_data['MACD_Signal'].iloc[-1]:.4f}")
+
+                # Enhanced buy conditions
+                price = symbol_data['Close'].iloc[-1]
+                rsi = symbol_data['RSI'].iloc[-1]
+                macd = symbol_data['MACD'].iloc[-1]
+                macd_signal = symbol_data['MACD_Signal'].iloc[-1]
+                price_change = symbol_data['Close'].pct_change().iloc[-1]
+                volume_change = symbol_data['Volume'].pct_change().iloc[-1]
+
+                # Buy signals
+                buy_signals = []
+                if rsi < 30:  # Oversold
+                    buy_signals.append("Oversold (RSI)")
+                if price_change > 0.01:  # 1% price increase
+                    buy_signals.append("Price momentum")
+                if volume_change > 0.05:  # 5% volume increase
+                    buy_signals.append("Volume surge")
+                if macd > macd_signal:  # MACD crossover
+                    buy_signals.append("MACD Crossover")
+
+                if len(buy_signals) >= 2:  # Need at least 2 confirming signals
+                    print(f"🎯 Buy signals: {', '.join(buy_signals)}")
+
+                    # Position sizing (5% of balance per trade)
+                    position_size = min(self.simulator.balance * 0.05, 50)
+
+                    if position_size >= 10:  # Minimum $10 trade
+                        quantity = position_size / price
+
                         trade = self.simulator.execute_trade(
                             date, symbol, price, 'BUY',
-                            quantity, prediction
+                            quantity, len(buy_signals)/4  # Adjusted signal strength
                         )
-                        
+
                         if trade:
                             self.learning_metrics['trades'] += 1
                             print(f"✅ Buy executed: {symbol}")
-                            
-                except Exception as e:
-                    print(f"❌ Error processing {symbol}: {e}")
-                    continue
-            
+
+                # Check existing positions for sell signals
+                if symbol in self.simulator.portfolio:
+                    position = self.simulator.portfolio[symbol]
+                    entry_price = position['entry_price']
+                    profit_pct = (price - entry_price) / entry_price * 100
+
+                    # Enhanced sell conditions
+                    sell_signals = []
+                    if profit_pct >= 3.0:  # Take profit at 3%
+                        sell_signals.append(f"Take profit {profit_pct:.2f}%")
+                    if profit_pct <= -1.5:  # Stop loss at -1.5%
+                        sell_signals.append(f"Stop loss {profit_pct:.2f}%")
+                    if rsi > 70:  # Overbought
+                        sell_signals.append("Overbought (RSI)")
+                    if macd < macd_signal:  # MACD crossover down
+                        sell_signals.append("MACD Crossover Down")
+
+                    if sell_signals:
+                        print(f"🎯 Sell signals: {', '.join(sell_signals)}")
+
+                        trade = self.simulator.execute_trade(
+                            date, symbol, price, 'SELL',
+                            position['quantity'], profit_pct/100
+                        )
+
+                        if trade:
+                            if profit_pct > 0:
+                                self.learning_metrics['successful_trades'] += 1
+                                self.learning_metrics['accuracy'].append(1)
+                                print(f"✅ Profitable sell: {symbol} ({profit_pct:.2f}%)")
+                            else:
+                                self.learning_metrics['accuracy'].append(0)
+                                print(f"🔻 Loss taken: {symbol} ({profit_pct:.2f}%)")
+
             # Print daily summary
-            portfolio_value = self.simulator.get_portfolio_value(date)
+            portfolio_value = self.simulator.get_portfolio_value(current_prices)
             print(f"\n📊 Daily Summary for {date}")
             print(f"Portfolio Value: ${portfolio_value:.2f}")
             print(f"Cash Balance: ${self.simulator.balance:.2f}")
             print(f"Open Positions: {len(self.simulator.portfolio)}")
             print(f"Success Rate: {self.get_success_rate():.2f}%")
-            
+
         except Exception as e:
             print(f"❌ Error in execute_trading_day: {str(e)}")
             traceback.print_exc()
-    
+
     def get_success_rate(self):
         """Calculate success rate of trades"""
         if self.learning_metrics['trades'] == 0:
             return 0.0
         return (self.learning_metrics['successful_trades'] / 
                 self.learning_metrics['trades'] * 100)
-    
+
+    def get_accuracy_trend(self):
+        """Calculate accuracy trend of predictions"""
+        if not self.learning_metrics['accuracy']:
+            return "No accuracy data available"
+        accuracy_percentage = (sum(self.learning_metrics['accuracy']) / 
+                               len(self.learning_metrics['accuracy'])) * 100
+        return f"{accuracy_percentage:.2f}%"
+
     def display_results(self):
-        """Display backtest results"""
+        """Display final backtest results"""
         print("\n Backtest Results")
         print("="*50)
         
@@ -424,38 +471,6 @@ class TradingBot:
             print(f"Win Rate: {metrics['win_rate']:.2f}%")
             print(f"Profit Factor: {metrics['profit_factor']:.2f}")
             print(f"Maximum Drawdown: {metrics['largest_drawdown']:.2f}%")
-    
-    def calculate_metrics(self, df):
-        """Calculate additional metrics for trading decisions"""
-        try:
-            # Calculate price changes
-            df['Price_Change'] = df['Close'].pct_change()
-            
-            # Calculate volume changes
-            df['Volume_Change'] = df['Volume'].pct_change()
-            
-            # Calculate moving averages
-            df['MA5'] = df['Close'].rolling(window=5).mean()
-            df['MA20'] = df['Close'].rolling(window=20).mean()
-            
-            # Calculate RSI
-            delta = df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            df['RSI'] = 100 - (100 / (1 + rs))
-            
-            return df
-            
-        except Exception as e:
-            print(f"❌ Error calculating metrics: {e}")
-            return df
-    
-    def get_accuracy_trend(self):
-        """Calculate accuracy trend of predictions"""
-        if not self.learning_metrics['accuracy']:
-            return "No accuracy data available"
-        return f"{sum(self.learning_metrics['accuracy'])/len(self.learning_metrics['accuracy']):.2f}%"
 
 def main():
     # Initialize the trading bot
