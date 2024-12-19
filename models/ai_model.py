@@ -12,13 +12,8 @@ class CryptoModel:
         """Train XGBoost model for crypto investment prediction"""
         # Standardize features
         X_scaled = self.scaler.fit_transform(X)
-
-        # Split the data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y, test_size=0.2, random_state=42
-        )
         
-        # Define and train the model with fixed hyperparameters
+        # Create and train the model
         self.model = xgb.XGBRegressor(
             learning_rate=0.1,
             n_estimators=200,
@@ -28,32 +23,17 @@ class CryptoModel:
         )
         
         # Train the model
-        self.model.fit(X_train, y_train)
+        self.model.fit(X_scaled, y)
         
         # Evaluate the model
-        y_pred = self.model.predict(X_test)
-        mse = mean_squared_error(y_test, y_pred)
-        r2 = r2_score(y_test, y_pred)
+        y_pred = self.model.predict(X_scaled)
+        mse = mean_squared_error(y, y_pred)
+        r2 = r2_score(y, y_pred)
         
         print("\n📊 Model Training Results")
         print("=" * 30)
         print(f"Mean Squared Error: {mse:.4f}")
         print(f"R² Score: {r2:.4f}")
-        
-        # Feature importance
-        feature_importance = dict(zip(
-            ['Market Cap', 'Volume', '24h Change', 'Market Rank'],
-            self.model.feature_importances_
-        ))
-        
-        print("\n🎯 Feature Importance")
-        print("=" * 30)
-        for feature, importance in sorted(
-            feature_importance.items(), 
-            key=lambda x: x[1], 
-            reverse=True
-        ):
-            print(f"{feature}: {importance:.4f}")
         
         return self.model
 

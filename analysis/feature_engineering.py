@@ -1,10 +1,12 @@
 from sklearn.preprocessing import StandardScaler
 import pandas as pd
 import numpy as np
+import logging
 
 class FeatureEngineer:
     def __init__(self):
         self.scaler = StandardScaler()
+        logging.basicConfig(level=logging.INFO)
 
     def prepare_training_data(self, market_data):
         """Prepare data for AI model training"""
@@ -17,29 +19,41 @@ class FeatureEngineer:
                 'market_cap_rank': market_data['market_cap_rank']
             })
             
-            # Create target variable (you can adjust this formula)
-            y = (market_data['price_change_24h'] / 100.0)  # Convert percentage to decimal
+            # Create target variable
+            y = (market_data['price_change_24h'] / 100.0)
             
             # Clean data
-            X = X.fillna(0)  # Replace NaN with 0
-            y = y.fillna(0)  # Replace NaN with 0
-            
-            # Remove infinite values
+            X = X.fillna(0)
+            y = y.fillna(0)
             X = X.replace([np.inf, -np.inf], 0)
             y = y.replace([np.inf, -np.inf], 0)
             
-            # Scale large numbers
+            # Scale features
             X['market_cap'] = np.log1p(X['market_cap'])
             X['volume'] = np.log1p(X['volume'])
+            X_scaled = self.scaler.fit_transform(X)
             
-            print("\nData Preparation Summary:")
-            print(f"Features shape: {X.shape}")
-            print(f"Target shape: {y.shape}")
-            print("\nFeature Statistics:")
-            print(X.describe())
+            logging.info("Data Preparation Summary:")
+            logging.info(f"Features shape: {X.shape}")
+            logging.info(f"Target shape: {y.shape}")
+            logging.info("Feature Statistics:")
+            logging.info(X.describe())
             
-            return X, y
+            return X_scaled, y
             
         except Exception as e:
-            print(f"Error in data preparation: {e}")
+            logging.error(f"Error in data preparation: {e}")
             return pd.DataFrame(), pd.Series()
+
+# Example usage
+if __name__ == "__main__":
+    # Mock data for testing
+    mock_data = pd.DataFrame({
+        'market_cap': [1e9, 5e8, 2e9],
+        'total_volume': [1e7, 5e6, 2e7],
+        'price_change_24h': [5, -3, 2],
+        'market_cap_rank': [1, 2, 3]
+    })
+    engineer = FeatureEngineer()
+    X, y = engineer.prepare_training_data(mock_data)
+    print(X, y)
