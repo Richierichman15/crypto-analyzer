@@ -1,113 +1,74 @@
-# Crypto Trading Bot
+# Crypto Trading Bot with Short-Selling Support
 
-A backtesting framework for cryptocurrency trading strategies with machine learning integration.
+A sophisticated cryptocurrency trading bot with machine learning capabilities, risk management, and support for both long and short positions.
 
-## Overview
+## Features
 
-This project implements a cryptocurrency trading bot with the following features:
+- **Dual Strategy Support**: Implements both long-only and short-selling strategies
+- **Market Trend Detection**: Automatically detects market trends to determine optimal trading strategy
+- **Machine Learning Integration**: Uses ML models to predict price movements
+- **Advanced Risk Management**: Includes position sizing, stop-loss, and take-profit mechanisms
+- **Backtesting Engine**: Test strategies against historical data
+- **Performance Metrics**: Track and analyze trading performance
 
-- **Data Collection**: Fetches historical crypto data from CoinGecko API
-- **Technical Analysis**: Calculates indicators like RSI, MACD, Moving Averages
-- **ML Integration**: Uses XGBoost to enhance trading predictions
-- **Backtesting**: Tests strategies on historical data
-- **Risk Management**: Implements position sizing and risk controls
-- **Performance Tracking**: Tracks and analyzes trading performance
+## Short-Selling Strategy
 
-## Getting Started
+The short-selling strategy branch adds the ability to profit from downward market movements:
 
-### Prerequisites
+- **Market Trend Analysis**: Detects bearish market conditions suitable for short positions
+- **Short Position Management**: Opens short positions when downward trends are detected
+- **Risk Controls**: Implements specialized risk management for short positions
+- **Strategy Comparison**: Compares performance of long-only vs. short-selling strategies
+
+## Usage
+
+Run a backtest comparing both strategies:
+
+```bash
+python main.py backtest --start 20250301 --end 20250331 --symbols BTC,ETH,SOL,ADA
+```
+
+Run in legacy mode (long-only):
+
+```bash
+python main.py legacy --days 90 --symbols BTC,ETH
+```
+
+## Requirements
 
 - Python 3.8+
-- pip (Python package manager)
+- pandas
+- numpy
+- scikit-learn
+- requests
 
-### Installation
+## Installation
 
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/crypto-analyzer.git
-cd crypto-analyzer
-```
-
-2. Create a virtual environment (optional but recommended):
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-### Running the Bot
-
-Run a backtest with default settings:
-```bash
-python main.py
-```
-
-### Command-Line Options
-
-The bot accepts several command-line arguments:
-
-- `--balance`: Initial balance for backtesting (default: 1000.0)
-- `--days`: Number of days for backtest (default: 90)
-- `--symbols`: Comma-separated list of crypto symbols (default: BTC,ETH,XRP,ADA,SOL,DOT,AVAX,MATIC)
-- `--cap-min`: Minimum market cap in USD (default: 5,000,000)
-- `--cap-max`: Maximum market cap in USD (default: 500,000,000)
-
-Example:
-```bash
-python main.py --balance 2000 --days 120 --symbols BTC,ETH,SOL,DOT
-```
+1. Clone the repository
+2. Create a virtual environment: `python -m venv venv`
+3. Activate the environment: `source venv/bin/activate` (Linux/Mac) or `venv\Scripts\activate` (Windows)
+4. Install dependencies: `pip install -r requirements.txt`
 
 ## Project Structure
 
-- `main.py`: Main program and backtest orchestration
-- `data/`: Data fetching and processing modules
-  - `data_fetcher.py`: Fetches market data
-  - `historical_data.py`: Retrieves historical price data
-- `trading/`: Trading-related components
-  - `simulator.py`: Simulates trading with a given balance
-  - `risk_manager.py`: Handles risk management for trades
-- `analysis/`: Analysis tools
-  - `performance.py`: Tracks trading performance
-  - `optimizer.py`: Optimizes trading strategies
+- `main.py`: Main entry point and trading bot implementation
+- `trading/`: Core trading components
+  - `simulator.py`: Trading simulator with short-selling support
+  - `risk_manager.py`: Risk management system
+- `data/`: Data handling modules
+  - `market_data.py`: Current market data fetcher
+  - `historical_data.py`: Historical price data fetcher
+- `performance/`: Performance tracking
 - `monitoring/`: Monitoring tools
-  - `monitor.py`: Monitors trading activity
-
-## Trading Strategy
-
-The current implementation uses a combination of:
-- Technical indicators (RSI, MACD, SMA)
-- Price and volume movements
-- Machine learning predictions (when enough data is available)
-
-Buy signals are generated when multiple indicators align, with trade sizing proportional to conviction.
-
-The ML component learns from historical trades to gradually improve prediction accuracy.
+- `analysis/`: Analysis utilities
 
 ## Future Improvements
 
-1. **Enhanced ML Models**:
-   - Deep learning integration
-   - Sentiment analysis from news/social media
-   - Reinforcement learning
-
-2. **Additional Features**:
-   - More technical indicators
-   - Market regime detection
-   - Correlation analysis between cryptos
-
-3. **Improved Risk Management**:
-   - Dynamic position sizing based on volatility
-   - Portfolio optimization
-   - Drawdown control
-
-4. **Live Trading**:
-   - Integration with exchange APIs
-   - Real-time alerts
-   - Trading dashboard
+- Implement real-time trading via exchange APIs
+- Add more technical indicators
+- Enhance ML model training with more data
+- Implement portfolio optimization
+- Add support for options and futures trading
 
 ## Disclaimer
 

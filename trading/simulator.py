@@ -6,10 +6,12 @@ class TradingSimulator:
     def __init__(self, initial_balance=10000):
         self.initial_balance = initial_balance
         self.balance = initial_balance
-        self.portfolio = {}
+        self.portfolio = {}  # Long positions
+        self.short_portfolio = {}  # Short positions
         self.trades_history = []
         self.min_trade_value = 50
         self.max_position_size = 0.20  # 20% of portfolio
+        self.margin_requirement = 0.5  # 50% margin requirement for shorts
         
     def calculate_position_size(self, price, confidence_score, volatility):
         """Calculate position size based on confidence and volatility"""
@@ -50,7 +52,8 @@ class TradingSimulator:
                     'quantity': quantity,
                     'entry_price': price,
                     'entry_date': date,
-                    'current_price': price
+                    'current_price': price,
+                    'position_type': 'long'
                 }
                 
                 print(f"✅ Buy executed. New balance: ${self.balance:.2f}")
@@ -67,6 +70,53 @@ class TradingSimulator:
                 del self.portfolio[symbol]
                 
                 print(f"✅ Sell executed. New balance: ${self.balance:.2f}")
+                
+            elif trade_type == 'SHORT':
+                # Calculate margin requirement
+                margin_required = (price * quantity) * self.margin_requirement
+                total_cost = margin_required + fees
+                print(f"Margin Required: ${margin_required:.2f}")
+                print(f"Total Cost: ${total_cost:.2f}")
+                
+                if total_cost > self.balance:
+                    print("❌ Insufficient balance for short position!")
+                    return None
+                
+                # Reserve margin
+                self.balance -= total_cost
+                
+                # Add to short portfolio
+                self.short_portfolio[symbol] = {
+                    'quantity': quantity,
+                    'entry_price': price,
+                    'entry_date': date,
+                    'current_price': price,
+                    'margin_reserved': margin_required,
+                    'position_type': 'short'
+                }
+                
+                print(f"✅ Short position opened. New balance: ${self.balance:.2f}")
+                
+            elif trade_type == 'COVER':
+                if symbol not in self.short_portfolio:
+                    print("❌ Symbol not in short portfolio!")
+                    return None
+                
+                position = self.short_portfolio[symbol]
+                entry_price = position['entry_price']
+                margin_reserved = position['margin_reserved']
+                
+                # Calculate profit/loss
+                price_difference = entry_price - price  # Profit if positive (price went down)
+                profit_loss = price_difference * quantity
+                
+                # Return margin + profit (or minus loss)
+                total_return = margin_reserved + profit_loss - fees
+                self.balance += total_return
+                
+                del self.short_portfolio[symbol]
+                
+                print(f"✅ Short position covered. P/L: ${profit_loss:.2f}. New balance: ${self.balance:.2f}")
                 
             # Record trade
             trade = {
@@ -87,16 +137,44 @@ class TradingSimulator:
             return None
     
     def get_portfolio_value(self, current_prices):
-        """Calculate total portfolio value"""
+        """Calculate total portfolio value including short positions"""
         portfolio_value = self.balance
         
+        # Add long positions
         for symbol, position in self.portfolio.items():
             if symbol in current_prices:
                 current_price = current_prices[symbol]
                 position_value = position['quantity'] * current_price
                 portfolio_value += position_value
                 
+        # Add short positions (unrealized P/L)
+        for symbol, position in self.short_portfolio.items():
+            if symbol in current_prices:
+                current_price = current_prices[symbol]
+                entry_price = position['entry_price']
+                quantity = position['quantity']
+                margin_reserved = position['margin_reserved']
+                
+                # Calculate unrealized P/L
+                price_difference = entry_price - current_price
+                unrealized_pl = price_difference * quantity
+                
+                # Add margin + unrealized P/L
+                portfolio_value += margin_reserved + unrealized_pl
+                
         return portfolio_value
+        
+    def get_position(self, symbol):
+        """Get position data regardless of type (long or short)"""
+        if symbol in self.portfolio:
+            return self.portfolio[symbol]
+        elif symbol in self.short_portfolio:
+            return self.short_portfolio[symbol]
+        return None
+        
+    def has_position(self, symbol):
+        """Check if there is any position (long or short) for a symbol"""
+        return symbol in self.portfolio or symbol in self.short_portfolio
 
 class RiskManager:
     def __init__(self):
