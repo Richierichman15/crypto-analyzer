@@ -1,18 +1,14 @@
-from pycoingecko import CoinGeckoAPI
 import pandas as pd
-from datetime import datetime, timedelta
 import time
-from tqdm import tqdm
+import requests  # Added for API calls
 import os
 import pickle
-import json
 
 class HistoricalDataFetcher:
     def __init__(self, start_date, end_date, symbols):
         self.start_date = start_date
         self.end_date = end_date
         self.symbols = symbols
-        self.cg = CoinGeckoAPI()
         self.delay = 0.25
         self.cache_dir = 'data/cache'  # Directory to store cached data
         
@@ -73,12 +69,13 @@ class HistoricalDataFetcher:
         # Get detailed coin information
         try:
             print("\n📊 Fetching coin details...")
-            all_coins = self.cg.get_coins_markets(
-                vs_currency='usd',
-                per_page=250,
-                page=1,
-                sparkline=False
-            )
+            response = requests.get("https://api.coingecko.com/api/v3/coins/markets", params={
+                'vs_currency': 'usd',
+                'per_page': 250,
+                'page': 1,
+                'sparkline': 'false'
+            })
+            all_coins = response.json()  # Get the JSON response
             
             # Create detailed symbol mapping
             symbol_to_details = {}
@@ -98,8 +95,8 @@ class HistoricalDataFetcher:
             print(f"Error fetching coin list: {e}")
             return {}
 
-        # Process each symbol with progress bar and detailed info
-        for symbol in tqdm(self.symbols, desc="Fetching Historical Data"):
+        # Process each symbol without progress bar
+        for symbol in self.symbols:
             try:
                 if symbol not in symbol_to_details:
                     print(f"\n⚠️ No coin details found for {symbol}")
@@ -111,19 +108,17 @@ class HistoricalDataFetcher:
                 print(f"Current Price: ${coin_details['current_price']:,.8f}")
                 print(f"24h Volume: ${coin_details['volume']:,.2f}")
                 
-                # Fetch historical data
-                data = self.cg.get_coin_market_chart_range_by_id(
-                    id=coin_details['id'],
-                    vs_currency='usd',
-                    from_timestamp=from_timestamp,
-                    to_timestamp=to_timestamp
-                )
+                # Fetch historical data using your API
+                response = requests.get(f"https://api.coingecko.com/api/v3/coins/{coin_details['id']}/market_chart/range", params={
+                    'vs_currency': 'usd',
+                    'from': from_timestamp,
+                    'to': to_timestamp
+                })
+                data = response.json()  # Get the JSON response
                 
                 # Convert to DataFrame with additional information
-                prices_df = pd.DataFrame(data['prices'], 
-                                      columns=['timestamp', 'Close'])
-                volumes_df = pd.DataFrame(data['total_volumes'], 
-                                       columns=['timestamp', 'Volume'])
+                prices_df = pd.DataFrame(data['prices'], columns=['timestamp', 'Close'])
+                volumes_df = pd.DataFrame(data['total_volumes'], columns=['timestamp', 'Volume'])
                 
                 df = pd.merge(prices_df, volumes_df, on='timestamp')
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -145,7 +140,7 @@ class HistoricalDataFetcher:
                 print(f"Date range: {df.index.min()} to {df.index.max()}")
                 print(f"Price range: ${df['Close'].min():.8f} to ${df['Close'].max():.8f}")
                 
-                time.sleep(self.delay)
+                time.sleep(self.delay)  # Delay between requests
                 
             except Exception as e:
                 print(f"\n❌ Error fetching data for {symbol}: {str(e)}")
@@ -164,12 +159,13 @@ class HistoricalDataFetcher:
         for i in range(0, len(symbols), chunk_size):
             chunk = symbols[i:i + chunk_size]
             try:
-                data = self.cg.get_coins_markets(
-                    vs_currency='usd',
-                    symbols=chunk,
-                    per_page=chunk_size,
-                    page=1
-                )
+                response = requests.get("https://api.coingecko.com/api/v3/coins/markets", params={
+                    'vs_currency': 'usd',
+                    'symbols': ','.join(chunk),
+                    'per_page': chunk_size,
+                    'page': 1
+                })
+                data = response.json()  # Get the JSON response
                 all_data.extend(data)
                 time.sleep(self.delay)
             except Exception as e:

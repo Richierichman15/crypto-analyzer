@@ -1,5 +1,6 @@
 import numpy as np
 from datetime import datetime
+import pandas as pd
 
 class RiskManager:
     def __init__(self):
@@ -34,6 +35,11 @@ class RiskManager:
         # Adjusted profit targets to account for fees
         self.quick_profit_target = 0.025    # 2.5% profit target (increased to cover fees)
         self.min_profit_after_fees = 0.005  # 0.5% minimum profit after fees
+        
+        self.max_daily_loss = 0.02  # 2% max daily loss
+        self.max_position_loss = 0.01  # 1% max loss per position
+        self.max_concentration = 0.2  # Maximum allocation to one asset
+        self.max_positions = 10  # Maximum number of open positions
     
     def calculate_position_size(self, balance, price, volatility, risk_score):
         """Calculate position size based on risk parameters"""
@@ -185,3 +191,86 @@ class RiskManager:
         net_profit = gross_profit - total_fees
         
         return net_profit
+    
+    def check_risk_limits(self, portfolio, current_prices):
+        """Check if any risk limits are breached"""
+        daily_pnl = self.calculate_daily_pnl(portfolio, current_prices)
+        position_risks = self.calculate_position_risks(portfolio)
+        correlation = self.calculate_portfolio_correlation(portfolio)
+        
+        return {
+            'daily_loss_exceeded': daily_pnl < -self.max_daily_loss,
+            'position_risk_exceeded': any(risk > self.max_position_loss for risk in position_risks),
+            'correlation_exceeded': correlation > self.max_correlation
+        }
+        
+    def check_trade(self, portfolio, symbol, price, quantity, trade_type):
+        """Validate if a trade meets risk management criteria"""
+        try:
+            # Check number of positions
+            if trade_type == 'BUY' and len(portfolio) >= self.max_positions:
+                print(f"⚠️ Risk limit: Maximum positions ({self.max_positions}) reached")
+                return False
+                
+            # Check concentration
+            if trade_type == 'BUY':
+                trade_value = price * quantity
+                portfolio_value = sum(pos['quantity'] * pos['current_price'] for pos in portfolio.values())
+                
+                # If first position, portfolio value might be zero
+                if portfolio_value == 0:
+                    return True
+                    
+                concentration = trade_value / (portfolio_value + trade_value)
+                if concentration > self.max_concentration:
+                    print(f"⚠️ Risk limit: Position concentration too high ({concentration:.2%})")
+                    return False
+            
+            # For now, all sell trades are approved (may add additional checks)
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error in risk check: {str(e)}")
+            # Default to conservative stance - block trade on error
+            return False
+    
+    def calculate_daily_pnl(self, portfolio, current_prices):
+        """Calculate daily P&L as percentage"""
+        total_pnl = 0
+        total_value = 0
+        
+        for symbol, position in portfolio.items():
+            if symbol in current_prices:
+                current_price = current_prices[symbol]
+                entry_price = position['entry_price']
+                quantity = position['quantity']
+                
+                position_value = quantity * current_price
+                position_pnl = (current_price - entry_price) * quantity
+                
+                total_pnl += position_pnl
+                total_value += position_value
+                
+        return total_pnl / total_value if total_value > 0 else 0
+    
+    def calculate_position_risks(self, portfolio):
+        """Calculate risk for each position"""
+        risks = []
+        
+        for symbol, position in portfolio.items():
+            # Simple risk measure based on position size
+            # In reality would include volatility, etc.
+            position_size = position['quantity'] * position['entry_price']
+            risks.append(position_size / 1000)  # Simplified
+            
+        return risks
+    
+    def calculate_portfolio_correlation(self, portfolio):
+        """Calculate average correlation between positions"""
+        # This is a simplified version - in reality would use price history
+        return 0.5  # Placeholder
+    
+    def calculate_max_drawdown(self, prices):
+        """Calculate maximum drawdown from price series"""
+        # For future implementation
+        return 0.1  # Placeholder
