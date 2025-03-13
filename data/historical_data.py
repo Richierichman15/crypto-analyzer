@@ -217,78 +217,92 @@ class HistoricalDataFetcher:
         return all_data
 
     def generate_mock_data(self, symbols, start_date, end_date):
-        """
-        Generate mock data for testing when API access is limited
-        
-        Parameters:
-        - symbols: List of symbols to generate data for
-        - start_date: Start date
-        - end_date: End date
-        
-        Returns:
-        - Dictionary with symbol as key and DataFrame as value
-        """
-        # Convert dates to datetime
-        if isinstance(start_date, str):
-            start_date = pd.Timestamp(start_date)
-        if isinstance(end_date, str):
-            end_date = pd.Timestamp(end_date)
+        """Generate mock data for testing with a bearish trend"""
+        try:
+            historical_data = {}
             
-        # Generate date range
-        date_range = pd.date_range(start=start_date, end=end_date, freq='H')
-        
-        # Generate mock data for each symbol
-        historical_data = {}
-        
-        # Different price trends and volatilities for each symbol
-        trends = {
-            'BTC': {'start_price': 60000, 'trend': -0.001, 'volatility': 0.02},  # Downward trend
-            'ETH': {'start_price': 2200, 'trend': 0.0005, 'volatility': 0.015},  # Slight upward trend
-            'SOL': {'start_price': 80, 'trend': -0.0015, 'volatility': 0.03},     # Stronger downward trend
-            'ADA': {'start_price': 0.5, 'trend': 0.001, 'volatility': 0.025},     # Upward trend
-            'DOT': {'start_price': 6, 'trend': -0.0005, 'volatility': 0.02},     # Slight downward trend
-            'XRP': {'start_price': 0.6, 'trend': 0.0, 'volatility': 0.018},      # Neutral trend
-            'AVAX': {'start_price': 20, 'trend': -0.002, 'volatility': 0.025},   # Strong downward trend
-            'MATIC': {'start_price': 0.8, 'trend': 0.0008, 'volatility': 0.02}   # Moderate upward trend
-        }
-        
-        # Default values for symbols not in the trends dictionary
-        default_trend = {'start_price': 100, 'trend': 0.0, 'volatility': 0.02}
-        
-        for symbol in symbols:
-            # Get trend parameters or use defaults
-            params = trends.get(symbol, default_trend)
+            # Add 30 days of historical data before the start date for indicator calculation
+            extended_start_date = start_date - pd.Timedelta(days=30)
             
-            # Generate price movement with random walk
-            price = params['start_price']
-            prices = []
-            volumes = []
-            
-            for i in range(len(date_range)):
-                # Apply trend and volatility
-                daily_return = params['trend'] + np.random.normal(0, params['volatility'])
-                price = price * (1 + daily_return)
-                prices.append(price)
+            # Generate mock data for each symbol
+            for symbol in symbols:
+                # Create a date range for the backtest period with extended history
+                date_range = pd.date_range(start=extended_start_date, end=end_date, freq='D')
                 
-                # Generate random volume
-                volume = price * (1 + np.random.normal(0, 0.5)) * 10000
-                volumes.append(volume)
+                # Create a dataframe with the date range
+                df = pd.DataFrame(index=date_range)
+                
+                # Generate a starting price based on the symbol
+                if symbol == 'BTC':
+                    base_price = 90000  # Start high for BTC
+                elif symbol == 'ETH':
+                    base_price = 2000
+                else:
+                    base_price = 100
+                
+                # Generate price data with a bearish trend (downward bias)
+                price_data = []
+                current_price = base_price
+                
+                for i in range(len(date_range)):
+                    # Add a downward bias to simulate a bear market (more likely to go down than up)
+                    if i > 0:
+                        # 65% chance of going down, 35% chance of going up (bearish)
+                        if np.random.random() < 0.65:
+                            # Down move with random magnitude between 0.5% and 3%
+                            pct_change = -np.random.uniform(0.005, 0.03)
+                        else:
+                            # Up move with random magnitude between 0.1% and 2% (smaller up moves in bear market)
+                            pct_change = np.random.uniform(0.001, 0.02)
+                        
+                        # Apply daily trend overlay (sustained downtrend)
+                        day_factor = -0.005  # Slight downward bias overall
+                        
+                        # Apply the changes
+                        current_price = current_price * (1 + pct_change + day_factor)
+                    
+                    price_data.append(current_price)
+                
+                # Add price data to dataframe
+                df['Open'] = price_data
+                df['High'] = df['Open'] * (1 + np.random.uniform(0, 0.02, len(df)))
+                df['Low'] = df['Open'] * (1 - np.random.uniform(0, 0.02, len(df)))
+                df['Close'] = df['Open'] * (1 + np.random.normal(0, 0.01, len(df)))
+                
+                # Ensure Close is within High and Low
+                df['Close'] = np.minimum(df['High'], np.maximum(df['Low'], df['Close']))
+                
+                # Generate volume data
+                volume_base = 1000000 if symbol == 'BTC' else 5000000 if symbol == 'ETH' else 10000000
+                df['Volume'] = np.random.uniform(0.5, 1.5, len(df)) * volume_base
+                
+                # Add symbol column
+                df['symbol'] = symbol
+                
+                # Calculate some basic indicators for the data
+                # RSI
+                delta = df['Close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / loss
+                df['RSI'] = 100 - (100 / (1 + rs))
+                
+                # Moving averages
+                df['SMA_5'] = df['Close'].rolling(window=5).mean()
+                df['SMA_20'] = df['Close'].rolling(window=20).mean()
+                
+                # MACD
+                df['EMA_12'] = df['Close'].ewm(span=12, adjust=False).mean()
+                df['EMA_26'] = df['Close'].ewm(span=26, adjust=False).mean()
+                df['MACD'] = df['EMA_12'] - df['EMA_26']
+                df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+                
+                # Store in historical data dictionary
+                historical_data[symbol] = df
             
-            # Create DataFrame
-            df = pd.DataFrame({
-                'Close': prices,
-                'Volume': volumes,
-                'symbol': symbol
-            }, index=date_range)
+            print(f"✅ Generated mock data for {len(symbols)} symbols")
+            return historical_data
             
-            # Calculate additional metrics
-            df['daily_return'] = df['Close'].pct_change()
-            df['volume_change'] = df['Volume'].pct_change()
-            
-            # Calculate indicators
-            df = self.calculate_indicators(df)
-            
-            historical_data[symbol] = df
-            
-        print(f"✅ Generated mock data for {len(historical_data)} symbols")
-        return historical_data
+        except Exception as e:
+            print(f"❌ Error generating mock data: {str(e)}")
+            return {}

@@ -79,8 +79,20 @@ class TradingBot:
         original_simulator = self.simulator
         
         # Convert date strings to datetime
-        start = pd.to_datetime(start_date, format='%Y%m%d')
-        end = pd.to_datetime(end_date, format='%Y%m%d')
+        try:
+            # First try with format='%Y%m%d'
+            start = pd.to_datetime(start_date, format='%Y%m%d')
+        except ValueError:
+            # Then try with format='%Y-%m-%d'
+            start = pd.to_datetime(start_date)
+            
+        try:
+            # First try with format='%Y%m%d'
+            end = pd.to_datetime(end_date, format='%Y%m%d')
+        except ValueError:
+            # Then try with format='%Y-%m-%d'
+            end = pd.to_datetime(end_date)
+            
         print(f"🔍 Running backtest from {start.strftime('%Y-%m-%d')} to {end.strftime('%Y-%m-%d')}")
         
         # Fetch historical data for all symbols
@@ -242,44 +254,34 @@ class TradingBot:
         }
     
     def get_current_day_data(self, historical_data, date):
-        """Get current day data with concise debugging"""
-        try:
-            if not isinstance(date, pd.Timestamp):
-                date = pd.Timestamp(date)
+        """
+        Get data for the current trading day, including historical context for indicators
+        
+        Parameters:
+        - historical_data: Dictionary of historical data frames
+        - date: Current date
+        
+        Returns:
+        - DataFrame with data for the current day and all symbols
+        """
+        current_data = pd.DataFrame()
+        
+        # For each symbol, get data up to the current date
+        for symbol, df in historical_data.items():
+            # Convert index to datetime if it's not already
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index)
             
-            daily_data = []
-            symbols_found = []
-            symbols_missing = []
+            # Get all data up to and including the current date
+            # This ensures we have enough history for indicators
+            symbol_data = df[df.index <= date].copy()
             
-            for symbol, df in historical_data.items():
-                try:
-                    if not isinstance(df.index, pd.DatetimeIndex):
-                        df.index = pd.to_datetime(df.index)
-                    
-                    day_data = df[df.index.date == date.date()]
-                    
-                    if not day_data.empty:
-                        daily_data.append(day_data)
-                        symbols_found.append(symbol)
-                    else:
-                        symbols_missing.append(symbol)
-                
-                except Exception as e:
-                    symbols_missing.append(symbol)
-                    continue
-            
-            if daily_data:
-                # Combine all symbol data for this date
-                combined_data = pd.concat(daily_data)
-                print(f"📊 Data available for {len(symbols_found)}/{len(historical_data)} symbols")
-                return combined_data
-            else:
-                print("❌ No data available for this date")
-                return pd.DataFrame()
-            
-        except Exception as e:
-            print(f"❌ Error in get_current_day_data: {e}")
-            return pd.DataFrame()
+            # Only include if we have data for the current date
+            if not symbol_data.empty and date in symbol_data.index:
+                # Add to the current data
+                current_data = pd.concat([current_data, symbol_data])
+        
+        return current_data
     
     def make_predictions(self, current_data):
         """Make predictions with machine learning model integration"""
@@ -535,12 +537,26 @@ class TradingBot:
             if current_data.empty:
                 print("❌ No data available for this date")
                 return
+                
+            # Get symbols available on this day
+            symbols_today = []
+            for symbol in current_data['symbol'].unique():
+                symbol_data = current_data[current_data['symbol'] == symbol]
+                if date in symbol_data.index:
+                    symbols_today.append(symbol)
+                    
+            if not symbols_today:
+                print("❌ No symbols available for this date")
+                return
+                
+            print(f"📊 Data available for {len(symbols_today)}/{len(historical_data)} symbols")
 
             # Create current prices dictionary for portfolio valuation
-            current_prices = {
-                row['symbol']: row['Close'] 
-                for _, row in current_data.iterrows()
-            }
+            current_prices = {}
+            for symbol in symbols_today:
+                symbol_data = current_data[(current_data['symbol'] == symbol) & (current_data.index == date)]
+                if not symbol_data.empty:
+                    current_prices[symbol] = symbol_data['Close'].iloc[0]
             
             # Check portfolio risk limits
             portfolio_reduced = False
@@ -605,25 +621,12 @@ class TradingBot:
             # Analyze market trend for shorting opportunities
             market_trend = "neutral"
             
-            # Get representative symbol (e.g., BTC) to determine market trend
-            trend_symbol = "BTC"
-            if trend_symbol in historical_data:
-                trend_data = historical_data[trend_symbol]
-                # Get prices for the last 7 days
-                recent_prices = []
-                for i in range(7):
-                    days_back = i + 1
-                    check_date = date - pd.Timedelta(days=days_back)
-                    if not isinstance(trend_data.index, pd.DatetimeIndex):
-                        trend_data.index = pd.to_datetime(trend_data.index)
-                    
-                    day_data = trend_data[trend_data.index.date == check_date.date()]
-                    if not day_data.empty:
-                        recent_prices.append(day_data['Close'].iloc[-1])
-                
-                if recent_prices:
-                    market_trend = self.risk_manager.detect_market_trend(recent_prices)
-                    print(f"📈 Market trend: {market_trend.upper()}")
+            # Get list of available symbols from current data
+            available_symbols = current_data['symbol'].unique().tolist()
+            
+            # Use our updated market trend detection function with available symbols
+            market_trend = self.risk_manager.detect_market_trend(available_symbols, historical_data)
+            print(f"📈 Market trend: {market_trend.upper()}")
 
             # Calculate technical indicators and predictions
             ml_features = []
@@ -635,8 +638,12 @@ class TradingBot:
                     symbol_data = current_data[current_data['symbol'] == symbol].copy()
                     
                     if len(symbol_data) < 2:
+                        print(f"⚠️ Not enough data for {symbol}: {len(symbol_data)} rows")
                         continue
 
+                    print(f"\n📊 Processing {symbol} data:")
+                    print(f"  - Data rows: {len(symbol_data)}")
+                    
                     # Calculate indicators
                     # Calculate RSI
                     delta = symbol_data['Close'].diff()
@@ -663,6 +670,12 @@ class TradingBot:
                     price_change = symbol_data['Close'].pct_change().iloc[-1] if not pd.isna(symbol_data['Close'].pct_change().iloc[-1]) else 0
                     volume_change = symbol_data['Volume'].pct_change().iloc[-1] if not pd.isna(symbol_data['Volume'].pct_change().iloc[-1]) else 0
 
+                    print(f"  - Price: ${price:.2f}")
+                    print(f"  - RSI: {rsi:.2f}")
+                    print(f"  - MACD: {macd:.4f}")
+                    print(f"  - Price change: {price_change:.4f}")
+                    print(f"  - Volume change: {volume_change:.4f}")
+                    
                     # Create feature vector for ML model
                     features = [
                         price,
@@ -675,20 +688,22 @@ class TradingBot:
                     
                     ml_features.append(features)
                     symbols_analyzed.append(symbol)
+                    print(f"  ✅ Features extracted successfully")
 
                 except Exception as e:
+                    print(f"❌ Error processing {symbol}: {str(e)}")
                     continue
 
             # Make predictions
             predictions = []
             
             # Attempt ML predictions if model exists and we have features
-            if hasattr(self, 'ml_model') and self.ml_model is not None and ml_features:
+            if hasattr(self, 'long_ml_model') and hasattr(self, 'short_ml_model') and ml_features:
                 try:
-                    # Use our new prediction function
+                    # Use our new prediction function with market trend awareness
                     ml_predictions = []
                     for i, features in enumerate(ml_features):
-                        ml_pred = self.predict_with_ml(features)
+                        ml_pred = self.predict_with_ml(features, market_trend)
                         if ml_pred is not None:
                             ml_predictions.append(ml_pred)
                         else:
@@ -699,175 +714,215 @@ class TradingBot:
                                 volume_change=ml_features[i][2],
                                 rsi=ml_features[i][3],
                                 macd=ml_features[i][4],
-                                macd_signal=ml_features[i][5]
+                                macd_signal=ml_features[i][5],
+                                market_trend=market_trend
                             )
                             ml_predictions.append(rule_prediction)
                     
-                    # Use ML predictions with some weight
-                    ml_weight = min(0.7, len(self.ml_data['features']) / 1000)
-                    
+                    # Create predictions with symbols
                     for i, symbol in enumerate(symbols_analyzed):
-                        # Calculate rule-based prediction
-                        rule_prediction = self.calculate_rule_based_prediction(
-                            price=ml_features[i][0],
-                            price_change=ml_features[i][1],
-                            volume_change=ml_features[i][2],
-                            rsi=ml_features[i][3],
-                            macd=ml_features[i][4],
-                            macd_signal=ml_features[i][5]
-                        )
-                        
-                        # Combine rule-based and ML predictions
-                        final_prediction = (rule_prediction * (1 - ml_weight)) + (ml_predictions[i] * ml_weight)
-                        predictions.append((symbol, final_prediction))
-                        
+                        if i < len(ml_predictions):
+                            predictions.append((symbol, ml_predictions[i]))
+                
                 except Exception as e:
                     print(f"⚠️ ML prediction error: {str(e)}")
-                    # Fall back to rule-based predictions
-                    for i, symbol in enumerate(symbols_analyzed):
-                        prediction = self.calculate_rule_based_prediction(
-                            price=ml_features[i][0],
-                            price_change=ml_features[i][1],
-                            volume_change=ml_features[i][2],
-                            rsi=ml_features[i][3],
-                            macd=ml_features[i][4],
-                            macd_signal=ml_features[i][5]
-                        )
-                        predictions.append((symbol, prediction))
-            else:
-                # Use rule-based predictions
+                    # Continue with rule-based fallback
+            
+            # Fall back to rule-based if no ML or if ML failed
+            if not predictions and ml_features:
+                print("⚠️ Using rule-based predictions as fallback")
+                print(f"  - ML features available: {len(ml_features)}")
+                print(f"  - Symbols analyzed: {len(symbols_analyzed)}")
+                
                 for i, symbol in enumerate(symbols_analyzed):
-                    prediction = self.calculate_rule_based_prediction(
+                    print(f"\n🔮 Calculating rule-based prediction for {symbol}")
+                    rule_prediction = self.calculate_rule_based_prediction(
                         price=ml_features[i][0],
                         price_change=ml_features[i][1],
                         volume_change=ml_features[i][2],
                         rsi=ml_features[i][3],
                         macd=ml_features[i][4],
-                        macd_signal=ml_features[i][5]
+                        macd_signal=ml_features[i][5],
+                        market_trend=market_trend
                     )
-                    predictions.append((symbol, prediction))
-
-            # Execute trades based on predictions
+                    predictions.append((symbol, rule_prediction))
+                    print(f"  ✅ Added prediction for {symbol}: {rule_prediction:.4f}")
+                    
+            # Log initial status
+            print(f"\n📅 Trading day: {date.strftime('%Y-%m-%d')} | Market trend: {market_trend.upper()}")
+            portfolio_value = self.simulator.get_portfolio_value(current_prices)
+            print(f"💰 Starting balance: ${self.simulator.balance:.2f} | Portfolio value: ${portfolio_value:.2f}")
+            
+            # Trading activity trackers
             buys_executed = []
             sells_executed = []
             shorts_executed = []
             covers_executed = []
+            trading_activity = False
+            
+            # Debug: Print all predictions
+            print("\n🔮 Predictions:")
+            for symbol, prediction in predictions:
+                price = current_prices.get(symbol, 0)
+                if price > 0:
+                    signal_str = f"{symbol} @ ${price:.2f}: "
+                    signal_str += f"{'BUY 📈' if prediction > 0.1 else 'SELL 📉' if prediction < -0.1 else 'HOLD ⏸️'}"
+                    signal_str += f" (Signal: {prediction:.4f})"
+                    print(signal_str)
             
             for symbol, prediction in predictions:
-                # Skip if prediction is too weak
-                if abs(prediction) < 0.1:
-                    continue
-                
+                # Skip if prediction is too weak or no price data
                 price = current_prices.get(symbol, 0)
-                if price == 0:
+                if abs(prediction) < 0.1 or price == 0:
                     continue
                 
                 # Check existing positions
                 has_long = symbol in self.simulator.portfolio
                 has_short = symbol in self.simulator.short_portfolio
                 
+                # Debug: Print trade evaluation
+                print(f"\n🔍 Evaluating trade for {symbol}:")
+                print(f"  - Price: ${price:.2f}")
+                print(f"  - Prediction: {prediction:.4f}")
+                print(f"  - Market trend: {market_trend}")
+                print(f"  - Has long position: {has_long}")
+                print(f"  - Has short position: {has_short}")
+                
                 # Long position logic (buy)
                 if prediction > 0.1 and not has_long and not has_short and market_trend != "bearish":
-                    # Don't open long positions in a bearish market
-                    # Dynamic position sizing based on conviction
-                    position_size = min(
-                        self.simulator.balance * (0.03 + (prediction * 0.05)),  # Base 3% + up to 5% more
-                        self.simulator.balance * 0.1  # Cap at 10%
+                    print(f"  ✅ Buy conditions met")
+                    # More aggressive position sizing for bullish trend + strong signal
+                    if market_trend == "bullish" and prediction > 0.15:
+                        # Use up to 15% of balance for strong signals in bullish trend
+                        position_size = self.simulator.balance * (0.03 + (prediction * 0.5))
+                        position_size = min(position_size, self.simulator.balance * 0.15)
+                    else:
+                        # Standard sizing: 3% base + up to 5% based on confidence
+                        position_size = self.simulator.balance * (0.03 + (prediction * 0.25))
+                        position_size = min(position_size, self.simulator.balance * 0.08)
+                    
+                    # Enforce minimum trade size of $10
+                    if position_size < 10:
+                        position_size = min(10, self.simulator.balance * 0.05)
+                    
+                    print(f"  - Position size: ${position_size:.2f}")
+                    
+                    # Calculate quantity and check additional risk factors
+                    quantity = position_size / price
+                    
+                    # Additional risk check
+                    ok_to_trade = self.risk_manager.check_trade(
+                        self.simulator.portfolio, 
+                        self.simulator.short_portfolio,
+                        symbol, 
+                        price, 
+                        quantity, 
+                        'BUY'
                     )
                     
-                    if position_size >= 10:  # Minimum $10 trade
-                        quantity = position_size / price
-                        
-                        # Additional risk check
-                        ok_to_trade = self.risk_manager.check_trade(
-                            self.simulator.portfolio, 
-                            self.simulator.short_portfolio,
-                            symbol, 
-                            price, 
-                            quantity, 
-                            'BUY'
+                    print(f"  - Risk check passed: {ok_to_trade}")
+                    
+                    if ok_to_trade:
+                        print(f"  🔄 Executing BUY trade")
+                        trade = self.simulator.execute_trade(
+                            date, symbol, price, 'BUY',
+                            quantity, prediction
                         )
                         
-                        if ok_to_trade:
-                            trade = self.simulator.execute_trade(
-                                date, symbol, price, 'BUY',
-                                quantity, prediction
-                            )
+                        if trade:
+                            trading_activity = True
+                            self.learning_metrics['trades'] += 1
+                            buys_executed.append(f"{symbol} (${price:.2f}, ${position_size:.2f})")
                             
-                            if trade:
-                                self.learning_metrics['trades'] += 1
-                                buys_executed.append(f"{symbol} (${price:.4f}, ${position_size:.2f})")
-                                
-                                # Store features and target for ML model
-                                # Target will be updated when position is closed
-                                for i, sym in enumerate(symbols_analyzed):
-                                    if sym == symbol:
-                                        self.ml_data['features'].append(ml_features[i])
-                                        self.ml_data['targets'].append(0)  # Placeholder until we sell
+                            # Store features and target for ML model
+                            # Target will be updated when position is closed
+                            for i, sym in enumerate(symbols_analyzed):
+                                if sym == symbol:
+                                    self.ml_data['features'].append(ml_features[i])
+                                    self.ml_data['targets'].append(0)  # Placeholder until we sell
                 
-                # Short position logic
+                # Short position logic (short)
                 elif prediction < -0.1 and not has_short and not has_long and market_trend == "bearish":
-                    # Only open short positions in a bearish market
-                    # Be more conservative with short position sizing
-                    position_size = min(
-                        self.simulator.balance * (0.02 + (abs(prediction) * 0.03)),  # More conservative sizing
-                        self.simulator.balance * 0.08  # Lower cap for shorts
+                    print(f"  ✅ Short conditions met")
+                    # More aggressive position sizing for bearish trend + strong signal
+                    if market_trend == "bearish" and prediction < -0.15:
+                        # Use up to 15% of balance for strong signals in bearish trend
+                        position_size = self.simulator.balance * (0.03 + (abs(prediction) * 0.5))
+                        position_size = min(position_size, self.simulator.balance * 0.15)
+                    else:
+                        # Standard sizing: 3% base + up to 5% based on confidence
+                        position_size = self.simulator.balance * (0.03 + (abs(prediction) * 0.25))
+                        position_size = min(position_size, self.simulator.balance * 0.08)
+                    
+                    # Enforce minimum trade size of $10
+                    if position_size < 10:
+                        position_size = min(10, self.simulator.balance * 0.05)
+                    
+                    print(f"  - Position size: ${position_size:.2f}")
+                    
+                    # Calculate quantity
+                    quantity = position_size / price
+                    
+                    # Additional risk check (relaxed for shorts in bearish markets)
+                    ok_to_trade = self.risk_manager.check_trade(
+                        self.simulator.portfolio, 
+                        self.simulator.short_portfolio,
+                        symbol, 
+                        price, 
+                        quantity, 
+                        'SHORT',
+                        strict_check=False  # Relax check for shorts in bearish market
                     )
                     
-                    if position_size >= 10:  # Minimum $10 trade
-                        quantity = position_size / price
-                        
-                        # Additional risk check for short positions
-                        ok_to_trade = self.risk_manager.check_trade(
-                            self.simulator.portfolio, 
-                            self.simulator.short_portfolio,
-                            symbol, 
-                            price, 
-                            quantity, 
-                            'SHORT'
+                    print(f"  - Risk check passed: {ok_to_trade}")
+                    
+                    if ok_to_trade:
+                        print(f"  🔄 Executing SHORT trade")
+                        trade = self.simulator.execute_trade(
+                            date, symbol, price, 'SHORT',
+                            quantity, abs(prediction)
                         )
                         
-                        if ok_to_trade:
-                            trade = self.simulator.execute_trade(
-                                date, symbol, price, 'SHORT',
-                                quantity, prediction
-                            )
+                        if trade:
+                            trading_activity = True
+                            self.learning_metrics['trades'] += 1
+                            shorts_executed.append(f"{symbol} (${price:.2f}, ${position_size:.2f})")
                             
-                            if trade:
-                                self.learning_metrics['trades'] += 1
-                                shorts_executed.append(f"{symbol} (${price:.4f}, ${position_size:.2f})")
-                                
-                                # Store features and target for ML model
-                                for i, sym in enumerate(symbols_analyzed):
-                                    if sym == symbol:
-                                        self.ml_data['features'].append(ml_features[i])
-                                        self.ml_data['targets'].append(0)  # Placeholder until we cover
-
-                # Manage existing long positions
-                elif has_long and (prediction < 0 or market_trend == "bearish"):
+                            # Store features and target for ML model (short)
+                            for i, sym in enumerate(symbols_analyzed):
+                                if sym == symbol:
+                                    self.ml_data['features'].append(ml_features[i])
+                                    self.ml_data['targets'].append(0)  # Placeholder until we cover
+                
+                # Manage existing long positions with improved exit strategies
+                elif has_long:
                     position = self.simulator.portfolio[symbol]
                     entry_price = position['entry_price']
                     profit_pct = (price - entry_price) / entry_price * 100
                     
-                    # Dynamic take profit and stop loss
-                    vol_factor = 1.0  # Could be calculated based on historical volatility
-                    take_profit = 2.0 * vol_factor
-                    stop_loss = -1.0 * vol_factor
+                    # Get dynamic exit thresholds from risk manager
+                    take_profit_threshold = self.risk_manager.take_profit_pct
+                    stop_loss_threshold = -self.risk_manager.stop_loss_pct
                     
-                    # Should we sell?
+                    # Should we sell? Collect all exit signals
                     sell_signals = []
                     
-                    if prediction < -0.1:
-                        sell_signals.append(f"Signal ({prediction:.2f})")
+                    # ML signal turned strongly negative
+                    if prediction < -0.15:
+                        sell_signals.append(f"Strong sell signal ({prediction:.2f})")
                     
+                    # Market trend turned bearish
                     if market_trend == "bearish":
                         sell_signals.append("Bearish market")
                     
-                    if profit_pct >= take_profit:
-                        sell_signals.append(f"Profit {profit_pct:.1f}%")
+                    # Take profit triggered
+                    if profit_pct >= take_profit_threshold:
+                        sell_signals.append(f"Take profit {profit_pct:.1f}% > {take_profit_threshold:.1f}%")
                     
-                    if profit_pct <= stop_loss:
-                        sell_signals.append(f"Stop {profit_pct:.1f}%")
+                    # Stop loss triggered - stricter in bearish markets
+                    adjusted_stop_loss = stop_loss_threshold * (1.2 if market_trend == "bearish" else 1.0)
+                    if profit_pct <= adjusted_stop_loss:
+                        sell_signals.append(f"Stop loss {profit_pct:.1f}% < {adjusted_stop_loss:.1f}%")
                     
                     # Calculate holding period
                     entry_date = position['entry_date']
@@ -876,10 +931,12 @@ class TradingBot:
                     else:
                         days_held = 0
                     
-                    # Sell if held for more than 7 days with minimal profit
-                    if days_held >= 7 and profit_pct < 1.0:
-                        sell_signals.append(f"Time ({days_held}d)")
+                    # Exit based on time - shorter holding in bearish markets
+                    max_hold_days = 5 if market_trend == "bearish" else 7
+                    if days_held >= max_hold_days and profit_pct < 1.0:
+                        sell_signals.append(f"Time limit ({days_held}d)")
                     
+                    # Exit if we hit any exit condition
                     if sell_signals:
                         trade = self.simulator.execute_trade(
                             date, symbol, price, 'SELL',
@@ -887,6 +944,7 @@ class TradingBot:
                         )
                         
                         if trade:
+                            trading_activity = True
                             # Update ML training data with actual profit/loss
                             for i, features in enumerate(self.ml_data['features']):
                                 # Simplified matching - in real system would need position ID
@@ -894,40 +952,47 @@ class TradingBot:
                                     self.ml_data['targets'][i] = profit_pct / 100  # Update target with actual profit
                                     break
                             
-                            sells_executed.append(f"{symbol} ({profit_pct:+.1f}%, reason: {', '.join(sell_signals)})")
+                            # Record the trade
+                            sell_msg = f"{symbol} ({profit_pct:+.1f}%, reason: {', '.join(sell_signals)})"
+                            sells_executed.append(sell_msg)
                             
+                            # Update metrics for learning
                             if profit_pct > 0:
                                 self.learning_metrics['successful_trades'] += 1
                                 self.learning_metrics['accuracy'].append(1)
                             else:
                                 self.learning_metrics['accuracy'].append(0)
                 
-                # Manage existing short positions
-                elif has_short and (prediction > 0 or market_trend != "bearish"):
+                # Manage existing short positions with improved exit strategies
+                elif has_short:
                     position = self.simulator.short_portfolio[symbol]
                     entry_price = position['entry_price']
                     # For shorts, profit is when price goes down
                     profit_pct = (entry_price - price) / entry_price * 100
                     
-                    # Dynamic take profit and stop loss for shorts
-                    vol_factor = 1.0
-                    take_profit = 2.0 * vol_factor
-                    stop_loss = -1.0 * vol_factor
+                    # Get dynamic exit thresholds from risk manager - more aggressive for shorts
+                    take_profit_threshold = self.risk_manager.short_take_profit_pct
+                    stop_loss_threshold = -self.risk_manager.short_stop_loss_pct
                     
-                    # Should we cover the short?
+                    # Should we cover the short? Collect all exit signals
                     cover_signals = []
                     
-                    if prediction > 0.1:
-                        cover_signals.append(f"Signal ({prediction:.2f})")
+                    # ML signal turned strongly positive
+                    if prediction > 0.15:
+                        cover_signals.append(f"Strong buy signal ({prediction:.2f})")
                     
+                    # Market trend is no longer bearish
                     if market_trend != "bearish":
                         cover_signals.append(f"Market trend ({market_trend})")
                     
-                    if profit_pct >= take_profit:
-                        cover_signals.append(f"Profit {profit_pct:.1f}%")
+                    # Take profit triggered - be more aggressive on covering profitable shorts
+                    if profit_pct >= take_profit_threshold:
+                        cover_signals.append(f"Take profit {profit_pct:.1f}% > {take_profit_threshold:.1f}%")
                     
-                    if profit_pct <= stop_loss:
-                        cover_signals.append(f"Stop {profit_pct:.1f}%")
+                    # Stop loss triggered - be more tolerant for shorts in bearish markets
+                    adjusted_stop_loss = stop_loss_threshold * (0.8 if market_trend == "bearish" else 1.0)
+                    if profit_pct <= adjusted_stop_loss:
+                        cover_signals.append(f"Stop loss {profit_pct:.1f}% < {adjusted_stop_loss:.1f}%")
                     
                     # Calculate holding period
                     entry_date = position['entry_date']
@@ -936,10 +1001,12 @@ class TradingBot:
                     else:
                         days_held = 0
                     
-                    # Cover if held for more than 5 days (shorter for shorts)
-                    if days_held >= 5 and profit_pct < 1.0:
-                        cover_signals.append(f"Time ({days_held}d)")
+                    # Cover based on time - longer holding allowed in bearish markets
+                    max_hold_days = 6 if market_trend == "bearish" else 4
+                    if days_held >= max_hold_days and profit_pct < 1.0:
+                        cover_signals.append(f"Time limit ({days_held}d)")
                     
+                    # Cover if we hit any exit condition
                     if cover_signals:
                         trade = self.simulator.execute_trade(
                             date, symbol, price, 'COVER',
@@ -947,14 +1014,18 @@ class TradingBot:
                         )
                         
                         if trade:
+                            trading_activity = True
                             # Update ML training data with actual profit/loss
                             for i, features in enumerate(self.ml_data['features']):
                                 if self.ml_data['targets'][i] == 0:  # Placeholder target
                                     self.ml_data['targets'][i] = profit_pct / 100  # Update target with actual profit
                                     break
                             
-                            covers_executed.append(f"{symbol} ({profit_pct:+.1f}%, reason: {', '.join(cover_signals)})")
+                            # Record the trade
+                            cover_msg = f"{symbol} ({profit_pct:+.1f}%, reason: {', '.join(cover_signals)})"
+                            covers_executed.append(cover_msg)
                             
+                            # Update metrics for learning
                             if profit_pct > 0:
                                 self.learning_metrics['successful_trades'] += 1
                                 self.learning_metrics['accuracy'].append(1)
@@ -972,7 +1043,6 @@ class TradingBot:
                 print(f"📈 Covers: {', '.join(covers_executed)}")
             
             # Only show portfolio summary if we had trading activity or risk management
-            trading_activity = buys_executed or sells_executed or shorts_executed or covers_executed or portfolio_reduced
             if trading_activity:
                 portfolio_value = self.simulator.get_portfolio_value(current_prices)
                 total_value = portfolio_value
@@ -989,49 +1059,82 @@ class TradingBot:
             print(f"❌ Error in execute_trading_day: {str(e)}")
             traceback.print_exc()
             
-    def calculate_rule_based_prediction(self, price, price_change, volume_change, rsi, macd, macd_signal):
+    def calculate_rule_based_prediction(self, price, price_change, volume_change, rsi, macd, macd_signal, market_trend="neutral"):
         """Calculate rule-based prediction score (positive for long, negative for short)"""
         prediction = 0.0
         
-        # For long positions (positive signals)
-        long_score = 0.0
+        print(f"\n🧮 Rule-based prediction inputs:")
+        print(f"  - Price: ${price:.2f}")
+        print(f"  - Price change: {price_change:.4f}")
+        print(f"  - Volume change: {volume_change:.4f}")
+        print(f"  - RSI: {rsi:.2f}")
+        print(f"  - MACD: {macd:.4f}")
+        print(f"  - MACD Signal: {macd_signal:.4f}")
+        print(f"  - Market trend: {market_trend}")
         
-        # Buy signals
-        if price_change > 0.001:  # Price up 0.1%
-            long_score += 0.05
+        # RSI signals (oversold/overbought)
+        if rsi < 30:  # Oversold - bullish signal
+            prediction += 0.1
+            print(f"  ✅ RSI oversold signal: +0.1")
+        elif rsi > 70:  # Overbought - bearish signal
+            prediction -= 0.1
+            print(f"  ✅ RSI overbought signal: -0.1")
         
-        if volume_change > 0.01:  # Volume up 1%
-            long_score += 0.05
+        # MACD signals
+        if macd > 0 and macd > macd_signal:  # Bullish
+            prediction += 0.15
+            print(f"  ✅ MACD bullish signal: +0.15")
+        elif macd < 0 and macd < macd_signal:  # Bearish
+            prediction -= 0.15
+            print(f"  ✅ MACD bearish signal: -0.15")
         
-        if rsi < 30:  # Oversold
-            long_score += 0.1
+        # Price movement signals
+        if price_change > 0.02:  # Strong up move
+            # In a bullish trend, this is continuation; in bearish, could be a reversal
+            if market_trend == "bullish":
+                prediction += 0.1  # Higher weight in bullish market
+                print(f"  ✅ Strong up move in bullish market: +0.1")
+            else:
+                prediction += 0.05  # Lower weight in bearish market
+                print(f"  ✅ Strong up move in non-bullish market: +0.05")
+        elif price_change < -0.02:  # Strong down move
+            # In a bearish trend, this is continuation; in bullish, could be a reversal
+            if market_trend == "bearish":
+                prediction -= 0.1  # Higher weight in bearish market
+                print(f"  ✅ Strong down move in bearish market: -0.1")
+            else:
+                prediction -= 0.05  # Lower weight in bullish market
+                print(f"  ✅ Strong down move in non-bearish market: -0.05")
         
-        if macd > macd_signal:  # MACD crossover
-            long_score += 0.1
-            
-        # For short positions (negative signals)
-        short_score = 0.0
+        # Volume confirmation
+        if abs(price_change) > 0.01 and volume_change > 0.5:
+            # High volume confirms the move direction
+            if price_change > 0:
+                prediction += 0.05
+                print(f"  ✅ High volume confirming up move: +0.05")
+            else:
+                prediction -= 0.05
+                print(f"  ✅ High volume confirming down move: -0.05")
         
-        # Short signals
-        if price_change < -0.001:  # Price down 0.1%
-            short_score += 0.05
+        # Market trend influence
+        if market_trend == "bullish":
+            # In bullish market, amplify positive signals, reduce negative ones
+            old_prediction = prediction
+            prediction = prediction * 1.2 if prediction > 0 else prediction * 0.8
+            print(f"  ✅ Bullish market adjustment: {old_prediction:.4f} → {prediction:.4f}")
+        elif market_trend == "bearish":
+            # In bearish market, amplify negative signals, reduce positive ones
+            old_prediction = prediction
+            prediction = prediction * 0.8 if prediction > 0 else prediction * 1.2
+            print(f"  ✅ Bearish market adjustment: {old_prediction:.4f} → {prediction:.4f}")
         
-        if volume_change < -0.01:  # Volume down 1%
-            short_score += 0.05
+        # Cap prediction in reasonable range
+        final_prediction = max(-0.25, min(0.25, prediction))
+        if final_prediction != prediction:
+            print(f"  ✅ Capped prediction: {prediction:.4f} → {final_prediction:.4f}")
         
-        if rsi > 70:  # Overbought
-            short_score += 0.1
-        
-        if macd < macd_signal:  # MACD crossover down
-            short_score += 0.1
-            
-        # Determine final prediction
-        if long_score > short_score:
-            prediction = long_score  # Positive prediction (BUY/HOLD)
-        elif short_score > long_score:
-            prediction = -short_score  # Negative prediction (SHORT/SELL)
-        
-        return prediction
+        print(f"  📊 Final prediction: {final_prediction:.4f}")
+        return final_prediction
 
     def get_success_rate(self):
         """Calculate success rate of trades"""
@@ -1109,101 +1212,133 @@ class TradingBot:
             self.ml_scaler = scaler
             
             # Print target distribution to see if we have both positive and negative examples
-            positives = sum(1 for target in y if target > 0)
-            negatives = sum(1 for target in y if target < 0)
-            zeros = sum(1 for target in y if target == 0)
+            positives = sum(1 for target in y if target > 0.01)  # Clearly positive 
+            negatives = sum(1 for target in y if target < -0.01)  # Clearly negative
+            neutrals = sum(1 for target in y if abs(target) <= 0.01)  # Close to zero
             
-            print(f"📊 Target distribution: {positives} positive, {negatives} negative, {zeros} zero")
+            print(f"📊 Target distribution: {positives} positive, {negatives} negative, {neutrals} neutral")
+            
+            # Separate training for long and short models
+            # For long model, focus on predicting positive returns
+            long_mask = y >= 0
+            long_X = X_scaled[long_mask]
+            long_y = y[long_mask]
+            
+            # For short model, focus on predicting negative returns
+            short_mask = y <= 0
+            short_X = X_scaled[short_mask]
+            short_y = abs(y[short_mask])  # Convert to positive values for training
+            
+            print(f"Long model: {len(long_X)} samples, Short model: {len(short_X)} samples")
             
             # Try different models based on available data
-            if len(X) >= 100:
-                # Use a more complex model for larger datasets
-                from sklearn.ensemble import GradientBoostingRegressor
-                model = GradientBoostingRegressor(
-                    n_estimators=100,
-                    learning_rate=0.05,
-                    max_depth=3,
-                    random_state=42
-                )
-            else:
-                # Use a simpler model for smaller datasets
-                from sklearn.linear_model import LinearRegression
-                model = LinearRegression()
+            from sklearn.ensemble import GradientBoostingRegressor, RandomForestClassifier
+            from sklearn.linear_model import LinearRegression
             
-            # Fit the model with available data
-            model.fit(X_scaled, y)
+            # Set up models
+            if len(X) >= 100:
+                long_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.05, max_depth=3, random_state=42)
+                short_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.05, max_depth=3, random_state=42)
+            else:
+                long_model = LinearRegression()
+                short_model = LinearRegression()
             
             # Simple validation
-            if len(X) >= 30:
-                # Use last 30% for validation
-                split_idx = int(len(X) * 0.7)
-                train_X, val_X = X_scaled[:split_idx], X_scaled[split_idx:]
-                train_y, val_y = y[:split_idx], y[split_idx:]
+            if len(long_X) >= 20 and len(short_X) >= 10:
+                # Split for long model
+                long_split_idx = int(len(long_X) * 0.7)
+                train_long_X, val_long_X = long_X[:long_split_idx], long_X[long_split_idx:]
+                train_long_y, val_long_y = long_y[:long_split_idx], long_y[long_split_idx:]
                 
-                model.fit(train_X, train_y)
+                # Split for short model (if enough data)
+                short_split_idx = max(int(len(short_X) * 0.7), min(5, len(short_X)-1))
+                if short_split_idx < len(short_X) - 1:
+                    train_short_X = short_X[:short_split_idx]
+                    val_short_X = short_X[short_split_idx:]
+                    train_short_y = short_y[:short_split_idx]
+                    val_short_y = short_y[short_split_idx:]
+                    have_short_validation = True
+                else:
+                    # Not enough short data for validation split
+                    train_short_X, train_short_y = short_X, short_y
+                    have_short_validation = False
                 
-                # Make predictions on validation set
-                val_preds = model.predict(val_X)
+                # Train the long model
+                long_model.fit(train_long_X, train_long_y)
                 
-                # Calculate metrics
-                from sklearn.metrics import mean_squared_error
-                mse = mean_squared_error(val_y, val_preds)
-                rmse = np.sqrt(mse)
+                # Train the short model
+                if len(train_short_X) > 0:
+                    short_model.fit(train_short_X, train_short_y)
                 
-                # Directional accuracy (positive/negative)
-                directional_matches = sum(1 for i, pred in enumerate(val_preds) 
-                                         if (pred > 0 and val_y[i] > 0) or 
-                                            (pred < 0 and val_y[i] < 0) or
-                                            (abs(pred) < 0.001 and abs(val_y[i]) < 0.001))
-                directional_accuracy = directional_matches / len(val_preds) * 100
+                # Evaluate long model
+                long_preds = long_model.predict(val_long_X)
+                long_rmse = np.sqrt(np.mean((val_long_y - long_preds) ** 2))
                 
-                print(f"🔍 Model validation: RMSE = {rmse:.4f}, Directional Accuracy = {directional_accuracy:.1f}%")
+                # Evaluate short model if possible
+                if have_short_validation and len(val_short_X) > 0:
+                    short_preds = short_model.predict(val_short_X)
+                    short_rmse = np.sqrt(np.mean((val_short_y - short_preds) ** 2))
+                    print(f"🔍 Long model RMSE: {long_rmse:.4f}, Short model RMSE: {short_rmse:.4f}")
+                else:
+                    print(f"🔍 Long model RMSE: {long_rmse:.4f}, Short model: insufficient validation data")
                 
-                # If accuracy is really poor, use a different approach
-                if directional_accuracy < 45:
-                    print("⚠️ Poor model performance, trying classification approach instead")
+                # If accuracy is poor for either model, try classification approach
+                if long_rmse > 0.05 or (have_short_validation and short_rmse > 0.05):
+                    print("⚠️ Poor regression performance, trying classification approach instead")
                     
-                    # Convert to classification problem (up/down/neutral)
-                    from sklearn.ensemble import RandomForestClassifier
+                    # Convert to classification (profitable vs. unprofitable trades)
+                    # For long trades: 1 for profit, 0 for loss
+                    long_classes = (train_long_y > 0).astype(int)
+                    val_long_classes = (val_long_y > 0).astype(int)
                     
-                    # Convert targets to classes: -1 (down), 0 (neutral), 1 (up)
-                    threshold = 0.01  # 1% threshold
-                    train_classes = np.zeros(len(train_y))
-                    train_classes[train_y > threshold] = 1
-                    train_classes[train_y < -threshold] = -1
+                    # For short trades: 1 for profit, 0 for loss
+                    if len(train_short_y) > 0:
+                        short_classes = (train_short_y > 0).astype(int)
+                        if have_short_validation:
+                            val_short_classes = (val_short_y > 0).astype(int)
                     
-                    val_classes = np.zeros(len(val_y))
-                    val_classes[val_y > threshold] = 1
-                    val_classes[val_y < -threshold] = -1
+                    # Train classifiers
+                    long_clf = RandomForestClassifier(n_estimators=50, max_depth=3, random_state=42)
+                    long_clf.fit(train_long_X, long_classes)
                     
-                    # Train a classifier
-                    clf = RandomForestClassifier(n_estimators=50, max_depth=3, random_state=42)
-                    clf.fit(train_X, train_classes)
+                    if len(train_short_y) > 0:
+                        short_clf = RandomForestClassifier(n_estimators=50, max_depth=3, random_state=42)
+                        short_clf.fit(train_short_X, short_classes)
                     
-                    # Validate classifier
-                    class_preds = clf.predict(val_X)
-                    class_accuracy = sum(1 for i, pred in enumerate(class_preds) 
-                                        if pred == val_classes[i]) / len(val_classes) * 100
+                    # Validate long classifier
+                    long_class_preds = long_clf.predict(val_long_X)
+                    long_class_acc = np.mean(long_class_preds == val_long_classes) * 100
                     
-                    print(f"🔍 Classification model: Accuracy = {class_accuracy:.1f}%")
+                    # Validate short classifier if possible
+                    if have_short_validation and len(val_short_X) > 0:
+                        short_class_preds = short_clf.predict(val_short_X)
+                        short_class_acc = np.mean(short_class_preds == val_short_classes) * 100
+                        print(f"🔍 Long classifier: {long_class_acc:.1f}%, Short classifier: {short_class_acc:.1f}%")
+                    else:
+                        print(f"🔍 Long classifier: {long_class_acc:.1f}%, Short classifier: insufficient data")
                     
-                    # If classification works better, use it
-                    if class_accuracy > directional_accuracy:
-                        print("🔄 Switching to classification model")
-                        # Train on full dataset
-                        all_classes = np.zeros(len(y))
-                        all_classes[y > threshold] = 1
-                        all_classes[y < -threshold] = -1
-                        
-                        clf = RandomForestClassifier(n_estimators=50, max_depth=3, random_state=42)
-                        clf.fit(X_scaled, all_classes)
-                        self.ml_model = clf
-                        self.ml_model_type = 'classifier'
-                        return True
+                    # Use classifiers if they perform better
+                    self.ml_model_type = 'classifier'
+                    self.long_ml_model = long_clf
+                    if len(train_short_y) > 0:
+                        self.short_ml_model = short_clf
+                    else:
+                        self.short_ml_model = None
+                    return True
             
-            # Final model training on all data
-            model.fit(X_scaled, y)
-            self.ml_model = model
+            # If we get here, use regression models
+            if len(long_X) > 0:
+                long_model.fit(long_X, long_y)
+                self.long_ml_model = long_model
+            else:
+                self.long_ml_model = None
+                
+            if len(short_X) > 0:
+                short_model.fit(short_X, short_y)
+                self.short_ml_model = short_model
+            else:
+                self.short_ml_model = None
+                
             self.ml_model_type = 'regressor'
             return True
             
@@ -1212,9 +1347,19 @@ class TradingBot:
             traceback.print_exc()
             return False
             
-    def predict_with_ml(self, features):
-        """Make predictions with ML model, supporting both regression and classification"""
-        if not hasattr(self, 'ml_model') or self.ml_model is None:
+    def predict_with_ml(self, features, market_trend="neutral"):
+        """
+        Make predictions with ML model, supporting both regression and classification
+        
+        Parameters:
+        - features: Feature vector for prediction
+        - market_trend: Current market trend (bullish, bearish, neutral)
+        
+        Returns:
+        - Float value indicating prediction (positive for long, negative for short)
+        """
+        if (not hasattr(self, 'long_ml_model') or self.long_ml_model is None) and \
+           (not hasattr(self, 'short_ml_model') or self.short_ml_model is None):
             return None
             
         try:
@@ -1225,24 +1370,46 @@ class TradingBot:
                 # Fallback if no scaler is available
                 features_scaled = np.array([features])
                 
+            # Determine which model to use based on market trend
+            use_short_model = market_trend == "bearish" and hasattr(self, 'short_ml_model') and self.short_ml_model is not None
+            use_long_model = (market_trend == "bullish" or market_trend == "neutral") and \
+                             hasattr(self, 'long_ml_model') and self.long_ml_model is not None
+                
             # Make prediction
             if hasattr(self, 'ml_model_type') and self.ml_model_type == 'classifier':
                 # For classifier models
-                prediction_class = self.ml_model.predict(features_scaled)[0]
-                # Convert class (-1, 0, 1) to confidence score
-                confidence_scores = self.ml_model.predict_proba(features_scaled)[0]
-                max_confidence = max(confidence_scores)
-                
-                # Map class to prediction value with confidence
-                if prediction_class == 1:  # Up trend
-                    return max_confidence * 0.2  # Map to 0-0.2 range
-                elif prediction_class == -1:  # Down trend
-                    return -max_confidence * 0.2  # Map to -0.2-0 range
-                else:  # Neutral
+                if use_short_model:
+                    # Short model predicts probability of profitable short
+                    prediction_class = self.short_ml_model.predict(features_scaled)[0]
+                    confidence = max(self.short_ml_model.predict_proba(features_scaled)[0])
+                    
+                    # Return negative value (for short) with confidence scaling
+                    return -confidence * 0.3 if prediction_class == 1 else -0.05
+                    
+                elif use_long_model:
+                    # Long model predicts probability of profitable long
+                    prediction_class = self.long_ml_model.predict(features_scaled)[0]
+                    confidence = max(self.long_ml_model.predict_proba(features_scaled)[0])
+                    
+                    # Return positive value (for long) with confidence scaling
+                    return confidence * 0.3 if prediction_class == 1 else 0.05
+                else:
                     return 0.0
             else:
                 # For regression models
-                return self.ml_model.predict(features_scaled)[0]
+                if use_short_model:
+                    # Short model predicts profit magnitude (return as negative)
+                    pred = -self.short_ml_model.predict(features_scaled)[0]
+                    # Amplify short signals in bearish markets
+                    return pred * 1.5 if market_trend == "bearish" else pred
+                    
+                elif use_long_model:
+                    # Long model predicts profit magnitude (return as positive)
+                    pred = self.long_ml_model.predict(features_scaled)[0]
+                    # Amplify long signals in bullish markets
+                    return pred * 1.5 if market_trend == "bullish" else pred
+                else:
+                    return 0.0
                 
         except Exception as e:
             print(f"❌ Error in ML prediction: {str(e)}")

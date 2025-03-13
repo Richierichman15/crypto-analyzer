@@ -7,28 +7,29 @@ class RiskManager:
     """Advanced risk management with short selling support"""
     def __init__(self):
         # General risk parameters
-        self.max_portfolio_risk = 0.05      # 5% maximum portfolio risk
-        self.max_position_risk = 0.02       # 2% maximum position risk
-        self.max_correlation = 0.75         # Maximum correlation between assets
-        self.max_leverage = 1.0             # No leverage (1.0 = 100% of capital)
+        self.max_position_size_pct = 0.1  # Maximum position size as % of total capital
+        self.max_daily_loss_pct = 0.05  # Maximum allowed daily loss (5% of capital)
+        
+        # Long position parameters
+        self.stop_loss_pct = 0.15       # Increased from 0.05 to allow more breathing room
+        self.take_profit_pct = 0.25     # Increased from 0.10 to allow for bigger gains
+        self.max_portfolio_exposure = 0.5  # Maximum % of capital in all long positions
+        
+        # Short position parameters
+        self.short_stop_loss_pct = 0.18    # Higher for shorts due to volatility risk
+        self.short_take_profit_pct = 0.35  # Higher potential gains for shorts in bear market
+        self.max_short_exposure = 0.4      # Maximum % of capital in all short positions
+        
+        # Market trend thresholds
+        self.bearish_threshold = -0.03  # -3% trend to consider bearish
+        self.bullish_threshold = 0.03   # +3% trend to consider bullish
+        
+        # Additional risk parameters
+        self.concentration_limit = 0.25  # Maximum % of capital in a single position
+        self.max_positions = 5          # Maximum number of open positions
         
         # Position-level risk parameters
-        self.long_stop_loss_pct = 0.02      # 2% stop loss for long positions
-        self.long_take_profit_pct = 0.04    # 4% take profit for long positions
         self.trailing_stop_pct = 0.015      # 1.5% trailing stop
-        
-        # Short position specific parameters
-        self.short_stop_loss_pct = 0.02     # 2% stop loss for short positions (price increases)
-        self.short_take_profit_pct = 0.04   # 4% take profit for short positions (price decreases)
-        self.max_short_exposure = 0.3       # Maximum 30% of portfolio in short positions
-        
-        # Market trend parameters
-        self.bearish_threshold = -0.02      # -2% threshold to consider market bearish
-        self.bullish_threshold = 0.02       # +2% threshold to consider market bullish
-        
-        # Volatility-based sizing
-        self.volatility_lookback = 20       # Days for volatility calculation
-        self.volatility_threshold = 0.03    # 3% daily volatility threshold
         
         # Portfolio diversification
         self.max_sector_exposure = 0.30     # 30% maximum sector exposure
@@ -47,67 +48,128 @@ class RiskManager:
         self.quick_profit_target = 0.025    # 2.5% profit target (increased to cover fees)
         self.min_profit_after_fees = 0.005  # 0.5% minimum profit after fees
         
-        self.max_daily_loss = 0.02  # 2% max daily loss
         self.max_position_loss = 0.01  # 1% max loss per position
-        self.max_concentration = 0.2  # Maximum allocation to one asset
-        self.max_positions = 10  # Maximum number of open positions
     
-    def detect_market_trend(self, prices):
+    def detect_market_trend(self, symbols, historical_data):
         """
-        Detect market trend based on recent prices
+        Detect market trend based on recent price data across multiple symbols
         
         Parameters:
-        - prices: List of recent prices (newest last)
+        - symbols: List of symbols to analyze
+        - historical_data: Historical price data dictionary
         
         Returns:
         - String indicating trend: 'bullish', 'bearish', or 'neutral'
         """
-        if len(prices) < 3:
-            return "neutral"  # Not enough data
+        # Not enough symbols or data
+        if not symbols or not historical_data:
+            return "neutral"
             
-        # Convert to numpy array for easier calculations
-        price_array = np.array(prices)
+        # Track trend signals from all symbols
+        symbol_trends = []
         
-        # Calculate returns
-        returns = np.diff(price_array) / price_array[:-1]
-        
-        # Calculate metrics
-        avg_return = np.mean(returns)
-        recent_returns = returns[-3:]  # Last 3 returns
-        recent_avg = np.mean(recent_returns)
-        
-        # Check if prices are consistently rising or falling
-        consistent_direction = all(r > 0 for r in recent_returns) or all(r < 0 for r in recent_returns)
-        
-        # Calculate moving averages if we have enough data
-        if len(price_array) >= 5:
-            ma5 = np.mean(price_array[-5:])
-            ma10 = np.mean(price_array[-10:]) if len(price_array) >= 10 else ma5
+        # Analyze each symbol
+        for symbol in symbols:
+            if symbol not in historical_data:
+                continue
+                
+            # Get price data
+            df = historical_data[symbol]
             
-            # Current price vs moving averages
-            current_price = price_array[-1]
-            price_above_ma5 = current_price > ma5
-            price_above_ma10 = current_price > ma10
+            # Check if we have enough data
+            if len(df) < 3:
+                continue
+                
+            # Get closing prices (most recent last)
+            prices = df['Close'].values
             
-            # Trend detection based on multiple factors
-            if recent_avg > 0.005 and consistent_direction and price_above_ma5 and price_above_ma10:
-                return "bullish"
-            elif recent_avg < -0.005 and consistent_direction and not price_above_ma5 and not price_above_ma10:
-                return "bearish"
+            # Calculate returns
+            returns = np.diff(prices) / prices[:-1]
             
-        # Simpler detection for fewer data points
-        if recent_avg > 0.01 and consistent_direction:
-            return "bullish"
-        elif recent_avg < -0.01 and consistent_direction:
+            # Check if we have enough returns
+            if len(returns) < 2:
+                continue
+                
+            # Calculate key metrics
+            avg_return = np.mean(returns)                      # Average return
+            recent_returns = returns[-min(3, len(returns)):]   # Last 3 returns or all if less
+            recent_avg = np.mean(recent_returns)               # Average recent return
+            
+            # Count consecutive down days
+            down_count = 0
+            for r in reversed(returns):  # Start from most recent
+                if r < 0:
+                    down_count += 1
+                else:
+                    break
+                    
+            # Count consecutive up days
+            up_count = 0
+            for r in reversed(returns):  # Start from most recent
+                if r > 0:
+                    up_count += 1
+                else:
+                    break
+            
+            # Calculate moving averages if enough data
+            trend_signal = 0  # -1 for bearish, 0 for neutral, 1 for bullish
+            
+            if len(prices) >= 5:
+                ma3 = np.mean(prices[-3:])  # 3-day MA
+                ma5 = np.mean(prices[-5:])  # 5-day MA
+                ma10 = np.mean(prices[-min(10, len(prices)):])  # 10-day MA or all if less
+                
+                # Current price relative to moving averages
+                current_price = prices[-1]
+                price_vs_ma3 = (current_price / ma3) - 1
+                price_vs_ma5 = (current_price / ma5) - 1
+                price_vs_ma10 = (current_price / ma10) - 1
+                
+                # Trend strength based on price vs moving averages
+                ma_trend = 0
+                ma_trend += 1 if price_vs_ma3 > 0.01 else (-1 if price_vs_ma3 < -0.01 else 0)
+                ma_trend += 1 if price_vs_ma5 > 0.02 else (-1 if price_vs_ma5 < -0.02 else 0)
+                ma_trend += 1 if price_vs_ma10 > 0.03 else (-1 if price_vs_ma10 < -0.03 else 0)
+                
+                # Determine signal from moving averages
+                if ma_trend >= 2:
+                    trend_signal = 1  # Bullish
+                elif ma_trend <= -2:
+                    trend_signal = -1  # Bearish
+            
+            # Determine final trend signal with more weight on recent data
+            if down_count >= 2 and recent_avg < -0.02:
+                trend_signal = -1  # Strongly bearish
+            elif up_count >= 2 and recent_avg > 0.02:
+                trend_signal = 1   # Strongly bullish
+            elif avg_return < -0.01:
+                trend_signal = -1  # Generally bearish
+            elif avg_return > 0.01:
+                trend_signal = 1   # Generally bullish
+                
+            # Add to symbol trends
+            symbol_trends.append(trend_signal)
+        
+        # If we have no symbols with enough data
+        if not symbol_trends:
+            return "neutral"
+            
+        # Calculate aggregate trend
+        aggregate_trend = sum(symbol_trends) / len(symbol_trends)
+        
+        # Determine overall market trend with bias toward bearish (risk averse)
+        if aggregate_trend <= -0.3:  # More sensitive to bearish signals
             return "bearish"
-            
-        return "neutral"
+        elif aggregate_trend >= 0.5:  # Less sensitive to bullish signals
+            return "bullish"
+        else:
+            return "neutral"
     
     def calculate_position_size(self, balance, price, volatility, risk_score, position_type='long'):
         """Calculate position size based on risk parameters"""
         try:
             # Base position size from portfolio risk
-            max_position = balance * self.max_position_risk
+            max_position = balance * self.max_position_size_pct
             
             # Adjust for volatility
             volatility_factor = self.calculate_volatility_factor(volatility)
@@ -134,15 +196,15 @@ class RiskManager:
     
     def calculate_volatility_factor(self, volatility):
         """Calculate position sizing factor based on volatility"""
-        if volatility > self.volatility_threshold:
+        if volatility > 0.03:
             # Reduce position size for high volatility
-            return self.volatility_threshold / volatility
+            return 0.03 / volatility
         return 1.0
     
     def check_stop_loss(self, entry_price, current_price, position_type='long'):
         """Check if stop loss has been hit"""
         if position_type == 'long':
-            stop_price = entry_price * (1 - self.long_stop_loss_pct)
+            stop_price = entry_price * (1 - self.stop_loss_pct)
             return current_price <= stop_price
         else:  # short position
             stop_price = entry_price * (1 + self.short_stop_loss_pct)
@@ -151,7 +213,7 @@ class RiskManager:
     def check_take_profit(self, entry_price, current_price, position_type='long'):
         """Check if take profit has been hit"""
         if position_type == 'long':
-            target_price = entry_price * (1 + self.long_take_profit_pct)
+            target_price = entry_price * (1 + self.take_profit_pct)
             return current_price >= target_price
         else:  # short position
             target_price = entry_price * (1 - self.short_take_profit_pct)
@@ -187,7 +249,7 @@ class RiskManager:
                 risk = self.calculate_position_risk(position, 'long')
                 total_risk += risk
                 
-                if risk > self.max_position_risk:
+                if risk > self.max_position_size_pct:
                     positions_at_risk.append(f"{symbol} (long)")
             
             # Check short positions
@@ -196,7 +258,7 @@ class RiskManager:
                 risk = self.calculate_position_risk(position, 'short')
                 total_risk += risk
                 
-                if risk > self.max_position_risk:
+                if risk > self.max_short_exposure:
                     positions_at_risk.append(f"{symbol} (short)")
             
             # Check short exposure
@@ -207,7 +269,7 @@ class RiskManager:
             return {
                 'total_risk': total_risk,
                 'positions_at_risk': positions_at_risk,
-                'risk_level': 'High' if total_risk > self.max_portfolio_risk else 'Normal',
+                'risk_level': 'High' if total_risk > self.max_position_size_pct else 'Normal',
                 'short_exposure': short_exposure
             }
             
@@ -258,7 +320,7 @@ class RiskManager:
                 return False, "Insufficient volume"
             
             # Check volatility
-            if volatility > self.volatility_threshold * 2:
+            if volatility > 0.03 * 2:
                 return False, "Excessive volatility"
             
             # Check minimum trade value
@@ -287,14 +349,28 @@ class RiskManager:
         short_exposure = self.calculate_short_exposure(short_portfolio)
         
         return {
-            'daily_loss_exceeded': daily_pnl < -self.max_daily_loss,
+            'daily_loss_exceeded': daily_pnl < -self.max_daily_loss_pct,
             'position_risk_exceeded': any(risk > self.max_position_loss for risk in position_risks),
-            'correlation_exceeded': correlation > self.max_correlation,
+            'correlation_exceeded': correlation > 0.75,
             'short_exposure_exceeded': short_exposure > self.max_short_exposure
         }
         
-    def check_trade(self, portfolio, short_portfolio, symbol, price, quantity, trade_type):
-        """Validate if a trade meets risk management criteria"""
+    def check_trade(self, portfolio, short_portfolio, symbol, price, quantity, trade_type, strict_check=True):
+        """
+        Validate if a trade meets risk management criteria
+        
+        Parameters:
+        - portfolio: Dictionary of long positions
+        - short_portfolio: Dictionary of short positions
+        - symbol: Symbol to trade
+        - price: Current price
+        - quantity: Quantity to trade
+        - trade_type: Type of trade (BUY, SELL, SHORT, COVER)
+        - strict_check: Whether to apply strict risk checks (can be relaxed for shorts in bearish markets)
+        
+        Returns:
+        - Boolean indicating if trade is allowed
+        """
         try:
             # Check number of positions
             total_positions = len(portfolio) + len(short_portfolio)
@@ -312,20 +388,26 @@ class RiskManager:
                     return True
                     
                 concentration = trade_value / (portfolio_value + trade_value)
-                if concentration > self.max_concentration:
+                if concentration > self.concentration_limit:
                     print(f"⚠️ Risk limit: Position concentration too high ({concentration:.2%})")
                     return False
             
-            # Check short exposure
+            # Check short exposure - less strict if not strict_check
             if trade_type == 'SHORT':
                 new_short_value = price * quantity
                 current_short_value = sum(pos['quantity'] * pos['entry_price'] for pos in short_portfolio.values())
                 total_capital = 1000  # Placeholder, should be actual total capital
                 
                 new_exposure = (current_short_value + new_short_value) / total_capital
-                if new_exposure > self.max_short_exposure:
+                max_exposure = self.max_short_exposure * (1.5 if not strict_check else 1.0)
+                
+                if new_exposure > max_exposure:
                     print(f"⚠️ Risk limit: Short exposure too high ({new_exposure:.2%})")
                     return False
+                    
+                # In bearish markets with relaxed checks, we can be more aggressive
+                if not strict_check:
+                    print(f"📊 Relaxed risk check for short in bearish market")
             
             # For now, all closing trades are approved
             return True
